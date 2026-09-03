@@ -1,0 +1,7 @@
+# HaggleMind repo — ignore secrets and generated artifacts
+.env
+sibyl_memory.db
+time_log.json
+__pycache__/
+*.pyc
+.pytest_cache/
