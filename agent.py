@@ -144,6 +144,21 @@ def negotiate_bill(vendor: str) -> dict:
     )
     print(f"[agent] Sibyl Memory: {tactic} confidence -> {confidence_after:.2f}")
 
+    # Dashboard persistence (optional, best-effort)
+    _log_to_dashboard({
+        "vendor": vendor,
+        "tactic": tactic,
+        "original_amount": original_amount,
+        "final_amount": final_amount,
+        "savings": original_amount - final_amount,
+        "confidence_before": confidence,
+        "confidence_after": confidence_after,
+        "accepted": accepted,
+        "payment_mode": mode,
+        "tx_hash": pay_result.get("tx_hash", ""),
+        "explorer_url": pay_result.get("explorer", ""),
+    })
+
     return {
         "vendor": vendor,
         "status": "success" if accepted else "failed",
@@ -158,6 +173,33 @@ def negotiate_bill(vendor: str) -> dict:
         "tx_hash": pay_result.get("tx_hash", ""),
         "explorer": pay_result.get("explorer", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# Dashboard persistence (optional — silent when dashboard DB is absent)
+# ---------------------------------------------------------------------------
+def _log_to_dashboard(result: dict) -> None:
+    """Write this negotiation to the agent_logs table for the Streamlit dashboard."""
+    try:
+        from persistence import log_agent_run
+
+        log_agent_run({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "vendor": result.get("vendor", ""),
+            "tactic": result.get("tactic", result.get("tactic_used", "")),
+            "original_amount": result.get("original_amount", 0),
+            "final_amount": result.get("final_amount", 0),
+            "savings": result.get("savings", 0),
+            "confidence_before": result.get("confidence_before"),
+            "confidence_after": result.get("confidence_after"),
+            "accepted": result.get("accepted", False),
+            "payment_mode": result.get("payment_mode", "unknown"),
+            "tx_hash": result.get("tx_hash", ""),
+            "explorer_url": result.get("explorer_url", result.get("explorer", "")),
+            "note": result.get("note", ""),
+        })
+    except Exception:
+        pass  # dashboard persistence is best-effort; never break the CLI
 
 
 def negotiate_all_vendors() -> list:

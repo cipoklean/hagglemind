@@ -26,6 +26,32 @@ from typing import Optional
 import requests
 
 # ---------------------------------------------------------------------------
+# Dashboard persistence helpers (optional, best-effort)
+# ---------------------------------------------------------------------------
+def _log_tx_to_dashboard(entry: dict) -> None:
+    """Write a transaction row for the Streamlit dashboard.
+
+    Best-effort: if the persistence module or DB is absent the call is
+    silently ignored so the CLI never breaks.
+    """
+    try:
+        from persistence import log_transaction
+
+        log_transaction({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "vendor": entry.get("vendor", ""),
+            "amount_usd": float(entry.get("amount_usd", entry.get("amount", 0))),
+            "tx_hash": entry.get("tx_hash", ""),
+            "block_number": entry.get("block_number"),
+            "network": entry.get("network", "Base Sepolia"),
+            "explorer_url": entry.get("explorer_url", ""),
+            "payment_mode": entry.get("payment_mode", "unknown"),
+            "status": entry.get("status", "confirmed"),
+        })
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 VENDOR_URL = os.environ.get("VENDOR_URL", "http://localhost:8777")
@@ -157,6 +183,16 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
         result = r.json() if r.headers.get("Content-Type", "").startswith("application/json") else {"paid": True, "raw": r.text[:500]}
         result["mode"] = "direct"
         print(f"[x402] Vendor accepted direct payment (no 402 needed)")
+
+        # Dashboard persistence
+        _log_tx_to_dashboard({
+            "vendor": vendor,
+            "amount_usd": amount_usd,
+            "tx_hash": result.get("tx_hash", ""),
+            "network": "Base Sepolia",
+            "explorer_url": result.get("explorer_url", ""),
+            "payment_mode": "direct_api",
+        })
         return result
 
     if r.status_code != 402:
@@ -285,6 +321,17 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
             print(f"[x402] Amount:  ${amount_usd:.2f} USD")
             print(f"[x402] TX Hash: {tx_hash}")
             print(f"[x402] Explorer: {explorer}")
+
+            # Dashboard persistence — record the on-chain tx
+            _log_tx_to_dashboard({
+                "vendor": vendor,
+                "amount_usd": amount_usd,
+                "tx_hash": tx_hash,
+                "network": "Base Sepolia",
+                "explorer_url": explorer,
+                "payment_mode": "x402_onchain",
+            })
+
             return result
         else:
             print(f"[x402] Resubmit failed: HTTP {r2.status_code}")
@@ -312,11 +359,21 @@ def _execute_fallback_payment(vendor: str, amount: float) -> dict:
         if r.status_code == 200:
             result = r.json()
             result["mode"] = "direct_api"
+            # Dashboard persistence — record the simulated/direct tx
+            _log_tx_to_dashboard({
+                "vendor": vendor,
+                "amount_usd": amount,
+                "tx_hash": result.get("tx_hash", ""),
+                "network": "Base Sepolia",
+                "explorer_url": result.get("explorer_url", ""),
+                "payment_mode": "direct_api",
+                "status": "confirmed",
+            })
             return result
     except requests.RequestException:
         pass
 
-    return {
+    fallback = {
         "paid": True,
         "amount": amount,
         "vendor": vendor,
@@ -324,6 +381,16 @@ def _execute_fallback_payment(vendor: str, amount: float) -> dict:
         "tx_hash": f"0x_sim_{vendor}_{int(time.time())}",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    _log_tx_to_dashboard({
+        "vendor": vendor,
+        "amount_usd": amount,
+        "tx_hash": fallback["tx_hash"],
+        "network": "Base Sepolia",
+        "explorer_url": "",
+        "payment_mode": "simulated",
+        "status": "simulated",
+    })
+    return fallback
 
 
 # ---------------------------------------------------------------------------
