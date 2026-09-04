@@ -39,7 +39,8 @@ Memory is load-bearing. The agent loses real money without it.
 ```
 hagglemind/
 ├── README.md              # This file
-├── memory.json            # Sibyl Memory — vendor tactic confidence store
+├── sibyl_memory.py        # Sibyl Memory SDK wrapper (sibyl-memory-client, SQLite-backed)
+├── sibyl_memory.db        # SQLite store managed by the Sibyl Memory SDK
 ├── vendor_server.py       # Mock Vendor API (simulates Comcast, Netflix, etc.)
 ├── agent.py               # The negotiation agent (reads memory, negotiates, pays)
 ├── x402_payment.py        # x402 payment wrapper (Base-ready, simulated in dev)
@@ -110,41 +111,42 @@ This script:
 
 ## How Memory Works
 
-`memory.json` stores per-vendor tactic confidence scores:
+HaggleMind's memory is backed by the real **Sibyl Memory SDK** (`sibyl-memory-client`), stored in a local SQLite database (`sibyl_memory.db`). There is no JSON file — every read and write goes through the SDK.
 
-```json
-{
-  "Comcast": {
-    "competitor_promo": {
-      "confidence": 0.90,
-      "successes": 3,
-      "failures": 0,
-      "last_used": "2026-09-03T10:00:00"
-    },
-    "loyalty_discount": {
-      "confidence": 0.60,
-      "successes": 1,
-      "failures": 1,
-      "last_used": "2026-09-01T10:00:00"
-    },
-    "budget_hardship": {
-      "confidence": 0.35,
-      "successes": 0,
-      "failures": 2,
-      "last_used": "2026-08-28T10:00:00"
-    }
-  }
-}
+The SDK implements a five-tier memory schema (HOT/WARM/COLD/REFERENCE/ARCHIVE). HaggleMind uses two tiers:
+
+- **WARM (entities)** — per-vendor tactic confidence scores. This is the load-bearing memory. Each entity is keyed `Vendor::Tactic` and carries `confidence`, `successes`, `failures`, and `last_used`.
+- **COLD (journal)** — append-only negotiation event log. Every negotiation writes an evaluated/acted event pair for auditability.
+
+The agent's memory wrapper is `sibyl_memory.py`, which exposes a `SibylMemoryStore` class. All agent code routes through it:
+
+```python
+from sibyl_memory import get_store
+
+mem = get_store()
+
+# Load-bearing recall — returns {} if memory was wiped
+tactics = mem.get_vendor_tactics("Comcast")
+tactic = mem.pick_tactic("Comcast")          # highest-confidence active tactic
+
+# Self-modifying write — confidence goes up on success, down on failure
+new_confidence = mem.update_after_negotiation("Comcast", "competitor_promo", success=True)
+
+# Audit trail
+mem.log_negotiation(vendor="Comcast", tactic="competitor_promo",
+                    original_amount=120.0, final_amount=75.0,
+                    accepted=True, confidence_before=0.90, confidence_after=0.95)
 ```
 
-The agent reads this file before every negotiation. It picks the tactic with the highest confidence score. After the negotiation, it updates the score:
+The confidence update rules:
 
 - **Success**: confidence += 0.10 (capped at 0.95)
 - **Failure**: confidence -= 0.15 (floored at 0.05)
+- **Threshold**: tactics below 0.20 confidence are skipped until they recover
 
-If a tactic's confidence drops below 0.20, the agent stops using it entirely until it recovers.
+The `chaos` command simulates a vendor changing its hidden rules — a tactic that worked suddenly stops working. The agent detects the failure and rewrites its confidence downward automatically via the SDK.
 
-The `chaos` command simulates a vendor changing its hidden rules — a tactic that worked suddenly stops working. The agent detects the failure and rewrites its confidence downward automatically.
+The `wipe_memory` CLI command deletes all WARM entities through the SDK (`client.delete_entity` for every active vendor tactic). After a wipe, `get_vendor_tactics` returns an empty dict and the agent falls back to its default tactic — which produces a materially worse financial outcome. That is the deletion test.
 
 ---
 
@@ -152,30 +154,45 @@ The `chaos` command simulates a vendor changing its hidden rules — a tactic th
 
 ```
 Invoice arrives
-  → Agent reads memory.json
-  → Picks highest-confidence tactic for that vendor
+  → Agent queries Sibyl Memory via SDK (get_vendor_tactics + pick_tactic)
+  → Picks highest-confidence active tactic for that vendor
   → Sends negotiation prompt to vendor API
   → Vendor accepts or rejects (based on hidden rules)
   → If accepted:
-      → Agent pays negotiated price via x402 on Base
-      → Updates tactic confidence upward in memory.json
+      → Agent pays negotiated price via x402 on Base (or direct /pay fallback)
+      → Sibyl Memory updates tactic confidence upward via SDK (update_after_negotiation)
+      → Negotiation event written to COLD journal (log_negotiation)
   → If rejected:
-      → Agent pays full price via x402 on Base
-      → Updates tactic confidence downward in memory.json
+      → Agent pays full price
+      → Sibyl Memory updates tactic confidence downward via SDK
+      → Negotiation event written to COLD journal
 ```
+
+All memory reads (`get_vendor_tactics`, `pick_tactic`, `get_tactic`) and writes (`set_vendor_tactic`, `update_after_negotiation`, `delete_entity`, `log_negotiation`) go through `sibyl_memory.py` → `sibyl-memory-client` SDK → `sibyl_memory.db` (SQLite). No code path reads or writes a JSON file.
 
 ---
 
-## x402 Payment (Base)
+## x402 Payment (Base Sepolia)
 
-The `x402_payment.py` module wraps the x402 HTTP payment flow:
+The `x402_payment.py` module executes real on-chain micropayments via the x402 protocol on Base Sepolia. The flow:
 
-1. Agent calls the vendor settlement endpoint with `X-Pay-Intent` header
-2. x402 middleware returns a payment URI
-3. Agent signs and submits the transaction on Base
-4. Vendor confirms payment and settles the negotiated price
+1. Agent POSTs to the vendor's `/pay-x402` endpoint
+2. x402 middleware returns HTTP 402 + a `PAYMENT-REQUIRED` header (base64-encoded `PaymentRequired`)
+3. Agent parses `PaymentRequired` via the x402 SDK (`parse_payment_required`)
+4. Agent creates a `PaymentPayload` via `x402ClientSync.create_payment_payload`
+5. Agent signs the payload with web3.py (EIP-191 via `hash_message` + `sign_hash`, signature hex)
+6. Agent resubmits the POST with a `PAYMENT-SIGNATURE` header
+7. Vendor verifies on-chain, settles, and returns the transaction hash + BaseScan explorer link
 
-In development/simulation mode, the payment is logged but not broadcast. Switch to `MAINNET_MODE=true` in `.env` to enable real Base payments.
+The real path is enabled when `X402_ENABLED=true` in `.env`. It requires:
+
+- `PRIVATE_KEY` — the payer's Base Sepolia private key (the agent derives the wallet address from it)
+- `BASE_RPC` — Base Sepolia RPC endpoint (default `https://sepolia.base.org`)
+- `VENDOR_BURNER_WALLET` — the destination address on Base Sepolia where the payment settles
+
+When `X402_ENABLED=false`, the module falls back to the vendor's direct `/pay` endpoint. The fallback is labeled `direct_api` or `simulated` in the dashboard — it never prints a `[SIM]` tag or pretends to be on-chain.
+
+Payment results are logged to the dashboard's `transactions` table on every path (real x402, direct API, simulated fallback) via `persistence.log_transaction()`.
 
 ---
 

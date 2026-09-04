@@ -5,7 +5,7 @@ Run: python vendor_server.py
 
 The vendor has hidden rules that determine whether a negotiation tactic succeeds.
 The agent does NOT know these rules — it learns them through trial and error,
-stored in memory.json as confidence scores.
+stored in the Sibyl Memory SDK (SQLite-backed via sibyl_memory.db).
 
 Hidden rules can be changed via the /chaos endpoint (called by the Time-Machine CLI).
 """
@@ -32,7 +32,7 @@ X402_FACILITATOR_URL = "https://x402.org/facilitator"
 X402_RECEIVER_ADDRESS = "0xYourBaseSepoliaAddressHere"  # Set to your wallet
 
 # Default hidden rules per vendor. The agent NEVER sees these — it only sees
-# the accept/reject response and must infer what works from memory.json.
+# the accept/reject response and must infer what works from the Sibyl Memory SDK.
 DEFAULT_RULES = {
     "Comcast": {
         "competitor_promo": {"accept_prob": 0.85, "discount": 0.40, "label": "Competitor promo works well"},
