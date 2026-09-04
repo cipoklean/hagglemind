@@ -179,6 +179,34 @@ In development/simulation mode, the payment is logged but not broadcast. Switch 
 
 ---
 
+## 💰 Proof of Autonomy Dashboard
+
+HaggleMind is not just a CLI; it includes a real-time verification dashboard that proves the agent's autonomous actions against persistent memory and on-chain settlement.
+
+### How to run the dashboard:
+
+1. Start the mock vendor server (Terminal 1):
+   `python vendor_server.py`
+
+2. Launch the Streamlit dashboard (Terminal 2):
+   `streamlit run app.py`
+
+3. Open `http://localhost:8501` in your browser.
+
+### The 4 Verification Panels:
+1. **The Brain (Sibyl Memory):** Live view of the agent's SQLite memory. Watch the `Confidence` scores update dynamically after every negotiation.
+2. **The Action (Agent Logs):** Live feed of the agent's reasoning, tactic selection, and discount achievements.
+3. **On-Chain Proof (Base Sepolia):** Live view of x402 payments. Click the "Open BaseScan" button to verify the exact negotiated amount was settled on-chain.
+4. **Trigger:** Click "Run Negotiation Agent" to execute the agent and watch the panels update in real-time.
+
+### The Deletion Test (Proving Memory is Load-Bearing):
+1. In the dashboard's terminal or via CLI, run `python haggle_cli.py wipe_memory`.
+2. Click "Run Negotiation Agent" again on the dashboard.
+3. Observe the "Brain" panel: The agent has no memory, defaults to a weak tactic, and the "Action" panel will show a significantly higher payment amount. 
+*Conclusion: Deleting Sibyl Memory materially degrades the agent's financial outcome. Memory is load-bearing.*
+
+---
+
 ## Scoring Maximization
 
 | Rubric Bucket | How HaggleMind Scores |
