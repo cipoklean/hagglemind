@@ -28,6 +28,42 @@ from sibyl_memory_client import MemoryClient, Storage, SearchResults
 ENTITY_CATEGORY = "vendor"
 JOURNAL_PREFIX = "negotiation"
 
+# Module-level flag: when True, the agent is running and events are live-streamed
+_RUNNING = False
+
+
+def set_running(running: bool) -> None:
+    """Signal whether a negotiation run is in progress (for the live indicator)."""
+    global _RUNNING
+    _RUNNING = running
+
+
+def is_running() -> bool:
+    return _RUNNING
+
+
+def _log_event(event_type: str, vendor: str, tactic: str,
+               confidence: Optional[float] = None, reason: Optional[str] = None) -> None:
+    """Best-effort memory event logger for the dashboard live feed.
+
+    Writes a row to the `memory_events` table so the frontend can show the
+    read/write happening in real time. Silent on any failure so the SDK
+    never breaks because the dashboard DB is absent.
+    """
+    try:
+        from persistence import log_memory_event
+        from datetime import datetime, timezone
+        log_memory_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": event_type,
+            "vendor": vendor,
+            "tactic": tactic,
+            "confidence": confidence,
+            "reason": reason,
+        })
+    except Exception:
+        pass  # best-effort; never break the memory layer
+
 
 # ---------------------------------------------------------------------------
 # SibylMemoryStore — wraps the SDK so the rest of HaggleMind never touches
@@ -80,6 +116,7 @@ class SibylMemoryStore:
         Returns:
             dict mapping tactic_name -> {confidence, successes, failures, last_used}
         """
+        _log_event("READ", vendor, "", reason="agent loading vendor tactics")
         entities = self.client.list_entities(
             category=ENTITY_CATEGORY,
             status="active",
@@ -103,6 +140,7 @@ class SibylMemoryStore:
 
     def get_tactic(self, vendor: str, tactic: str) -> Optional[dict[str, Any]]:
         """Read a single tactic's confidence data from Sibyl Memory."""
+        _log_event("READ", vendor, tactic, reason="agent reading single tactic")
         entities = self.client.list_entities(
             category=ENTITY_CATEGORY,
             status="active",
@@ -129,6 +167,8 @@ class SibylMemoryStore:
         failures: int,
     ):
         """Write or update a vendor+tactic entity in Sibyl Memory (WARM tier)."""
+        _log_event("WRITE", vendor, tactic, confidence=confidence,
+                   reason=f"confidence -> {confidence:.2f} (s:{successes} f:{failures})")
         now = datetime.now(timezone.utc).isoformat()
         body = {
             "confidence": round(confidence, 2),
@@ -147,6 +187,7 @@ class SibylMemoryStore:
 
     def delete_vendor(self, vendor: str):
         """Delete ALL tactic entities for a vendor (used by wipe_memory)."""
+        _log_event("WRITE", vendor, "", reason=f"wipe_memory: deleting vendor {vendor}")
         entities = self.client.list_entities(
             category=ENTITY_CATEGORY, status="active", limit=200
         )
@@ -157,6 +198,7 @@ class SibylMemoryStore:
 
     def wipe_all(self):
         """Wipe ALL vendor tactic memory (deletion test)."""
+        _log_event("WRITE", "", "", reason="wipe_memory: clearing all vendors")
         entities = self.client.list_entities(
             category=ENTITY_CATEGORY, status="active", limit=200
         )
@@ -178,6 +220,10 @@ class SibylMemoryStore:
         confidence_after: float,
     ):
         """Append a negotiation event to the COLD journal tier."""
+        reason = ("negotiation complete → journal write"
+                   f" ({'accepted' if accepted else 'rejected'}, "
+                   f"conf {confidence_before:.2f}→{confidence_after:.2f})")
+        _log_event("WRITE", vendor, tactic, confidence=confidence_after, reason=reason)
         self.client.write_event(
             evaluated={
                 "vendor": vendor,
@@ -314,3 +360,4 @@ def reset_store():
     if _default_store is not None:
         _default_store.storage.close()
     _default_store = SibylMemoryStore()
+    _log_event("WRITE", "", "", reason="store reset")

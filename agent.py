@@ -42,6 +42,44 @@ import sibyl_memory  # noqa: E402  # our wrapper around sibyl-memory-client SDK
 
 
 # ---------------------------------------------------------------------------
+# Dashboard action-step + memory-event logging (optional, best-effort)
+# ---------------------------------------------------------------------------
+
+def _log_step(vendor: str, step_num: int, step_type: str, message: str) -> None:
+    """Append a chat-style negotiation step to the dashboard action_steps table."""
+    try:
+        from persistence import log_action_step
+        from datetime import datetime, timezone
+        log_action_step({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "vendor": vendor,
+            "step_num": step_num,
+            "step_type": step_type,
+            "message": message,
+        })
+    except Exception:
+        pass  # best-effort; never break the CLI
+
+
+def _log_memory_event(event_type: str, vendor: str, tactic: str,
+                      confidence: Optional[float] = None,
+                      reason: Optional[str] = None) -> None:
+    """Log a READ/WRITE memory event for the live event feed."""
+    try:
+        from persistence import log_memory_event
+        from datetime import datetime, timezone
+        log_memory_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": event_type,
+            "vendor": vendor,
+            "tactic": tactic,
+            "confidence": confidence,
+            "reason": reason,
+        })
+    except Exception:
+        pass  # best-effort; never break the CLI
+
+# ---------------------------------------------------------------------------
 # Vendor API
 # ---------------------------------------------------------------------------
 
@@ -86,6 +124,10 @@ def pay_vendor(vendor: str, amount: float) -> dict:
 # ---------------------------------------------------------------------------
 
 def negotiate_bill(vendor: str) -> dict:
+    # Signal that a run is in progress — drives the live indicator + event feed
+    sibyl_memory.set_running(True)
+    _log_step(vendor, 0, "run", f"HaggleMind starting negotiation for {vendor}")
+
     print(f"\n{'='*60}")
     print(f"[agent] HaggleMind negotiating with {vendor}")
     print(f"{'='*60}")
@@ -93,10 +135,13 @@ def negotiate_bill(vendor: str) -> dict:
     # Step 1: Check invoice
     invoice = check_invoice(vendor)
     if not invoice:
+        _log_step(vendor, 1, "error", f"No invoice for {vendor}")
+        sibyl_memory.set_running(False)
         return {"vendor": vendor, "status": "no_invoice", "message": f"No invoice for {vendor}"}
 
     original_amount = invoice["amount"]
     print(f"[agent] Invoice: ${original_amount:.2f}/month from {vendor}")
+    _log_step(vendor, 1, "info", f"Invoice received: ${original_amount:.2f}/month")
 
     # Step 2: Pick tactic from Sibyl Memory (LOAD-BEARING recall)
     mem = sibyl_memory.get_store()
@@ -113,27 +158,36 @@ def negotiate_bill(vendor: str) -> dict:
         for t, d in sorted(vendor_mem.items(), key=lambda x: -x[1].get("confidence", 0)):
             marker = " <-- USING THIS" if t == tactic else ""
             print(f"  {t:25s} conf={d.get('confidence', 0):.2f}  s:{d.get('successes', 0)} f:{d.get('failures', 0)}{marker}")
+            _log_step(vendor, 2, "memory", f"  {t:25s} conf={d.get('confidence', 0):.2f}  s:{d.get('successes', 0)} f:{d.get('failures', 0)}")
     else:
         print(f"  (empty — no Sibyl Memory for {vendor})")
+        _log_step(vendor, 2, "memory", "  (empty — no Sibyl Memory for this vendor)")
     print(f"[agent] Selected: {tactic} (confidence: {confidence:.2f})")
+    _log_step(vendor, 3, "decision", f"Selected tactic: {tactic} (confidence: {confidence:.2f})")
 
     if not vendor_mem:
         print(f"[agent] *** DELETION TEST: No memory — using default '{DEFAULT_TACTIC}' ***")
+        _log_step(vendor, 3, "warning", f"DELETION TEST: no memory — falling back to default '{DEFAULT_TACTIC}'")
 
     # Step 3: Negotiate
     print(f"[agent] Negotiating with '{tactic}'...")
+    _log_step(vendor, 4, "action", f"Negotiating with '{tactic}'...")
     result = negotiate_with_vendor(vendor, tactic, original_amount)
     accepted = result.get("accepted", False)
     final_amount = result.get("final_amount", original_amount)
     print(f"[agent] Vendor: {result.get('vendor_response', '')}")
+    _log_step(vendor, 5, "vendor", result.get("vendor_response", "") or "no response")
     print(f"[agent] ${original_amount:.2f} -> ${final_amount:.2f}  {'SAVED' if accepted else 'NO SAVE'}")
+    _log_step(vendor, 6, "result", f"${original_amount:.2f} -> ${final_amount:.2f}  {'SAVED' if accepted else 'NO SAVE'}")
 
     # Step 4: Pay (real x402 on Base Sepolia, or simulated)
     print(f"[agent] Paying ${final_amount:.2f}...")
+    _log_step(vendor, 7, "action", f"Paying ${final_amount:.2f}...")
     pay_result = pay_vendor(vendor, final_amount)
     mode = pay_result.get("mode", "?")
     tx_info = pay_result.get("tx_hash", pay_result.get("error", ""))
     print(f"[agent] Payment: {mode} — {tx_info}")
+    _log_step(vendor, 8, "payment", f"Payment: {mode} — {tx_info}")
 
     # Step 5: Update Sibyl Memory (self-modifying via SDK)
     confidence_after = mem.update_after_negotiation(vendor, tactic, accepted)
@@ -142,7 +196,11 @@ def negotiate_bill(vendor: str) -> dict:
         original_amount=original_amount, final_amount=final_amount,
         accepted=accepted, confidence_before=confidence, confidence_after=confidence_after,
     )
+    delta_str = f"+{confidence_after - confidence:+.2f}" if accepted else f"{confidence_after - confidence:+.2f}"
+    reason = f"{'vendor accepted' if accepted else 'vendor rejected'} → {delta_str}"
+    _log_memory_event("WRITE", vendor, tactic, confidence=confidence_after, reason=reason)
     print(f"[agent] Sibyl Memory: {tactic} confidence -> {confidence_after:.2f}")
+    _log_step(vendor, 9, "memory", f"Sibyl Memory: {tactic} confidence -> {confidence_after:.2f}")
 
     # Dashboard persistence (optional, best-effort)
     _log_to_dashboard({
@@ -159,6 +217,7 @@ def negotiate_bill(vendor: str) -> dict:
         "explorer_url": pay_result.get("explorer", ""),
     })
 
+    sibyl_memory.set_running(False)
     return {
         "vendor": vendor,
         "status": "success" if accepted else "failed",
@@ -210,6 +269,7 @@ def negotiate_all_vendors() -> list:
         if r["status"] == "no_invoice":
             print(f"[agent] Skipping {vendor} — no invoice.")
         time.sleep(0.5)
+    sibyl_memory.set_running(False)
     return results
 
 

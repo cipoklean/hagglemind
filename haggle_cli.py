@@ -198,16 +198,12 @@ def cmd_wipe_memory(args):
     entities_before = mem.client.list_entities("vendor", status="active", limit=200)
     print(f"[cli] Entities before wipe: {len(entities_before)}")
 
-    # Drop ALL vendor entities from the WARM tier
-    for ent in entities_before:
-        mem.client.delete_entity("vendor", ent["name"])
+    # Drop ALL vendor entities from the WARM tier via the SDK wrapper
+    mem.wipe_all()
 
     # Also clear any journal entries
     events = mem.client.read_events(limit=200)
     print(f"[cli] Journal events before wipe: {len(events)}")
-
-    # Wipe everything by resetting tenant
-    mem.set_tenant("00000000-0000-0000-0000-000000000000")  # zero tenant = empty
 
     mem.storage.close()
 

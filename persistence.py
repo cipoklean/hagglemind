@@ -52,6 +52,25 @@ CREATE TABLE IF NOT EXISTS transactions (
     payment_mode  TEXT    NOT NULL DEFAULT 'unknown',
     status        TEXT    NOT NULL DEFAULT 'confirmed'
 );
+
+CREATE TABLE IF NOT EXISTS memory_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp     TEXT    NOT NULL,
+    event_type    TEXT    NOT NULL DEFAULT 'INFO',
+    vendor        TEXT    NOT NULL DEFAULT '',
+    tactic        TEXT    NOT NULL DEFAULT '',
+    confidence    REAL,
+    reason        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS action_steps (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp     TEXT    NOT NULL,
+    vendor        TEXT    NOT NULL DEFAULT '',
+    step_num      INTEGER NOT NULL DEFAULT 0,
+    step_type     TEXT    NOT NULL DEFAULT 'info',
+    message       TEXT    NOT NULL
+);
 """
 
 
@@ -186,6 +205,131 @@ def wipe_dashboard_tables() -> None:
     try:
         conn.execute("DELETE FROM agent_logs")
         conn.execute("DELETE FROM transactions")
+        conn.execute("DELETE FROM memory_events")
+        conn.execute("DELETE FROM action_steps")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Memory events (READ/WRITE audit trail for the live event feed)
+# ---------------------------------------------------------------------------
+
+def log_memory_event(entry: dict[str, Any]) -> int:
+    """Append a memory event row (READ/WRITE/DELETE). Returns the new row id.
+
+    Best-effort: if the DB is absent the call is silently ignored so the
+    agent CLI never breaks.
+    """
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """INSERT INTO memory_events
+               (timestamp, event_type, vendor, tactic, confidence, reason)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                entry.get("event_type", "INFO"),
+                entry.get("vendor", ""),
+                entry.get("tactic", ""),
+                entry.get("confidence"),
+                entry.get("reason"),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_memory_events(limit: int = 50, vendor: Optional[str] = None,
+                      event_type: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return the most recent memory events, newest first."""
+    conn = _connect()
+    try:
+        sql = "SELECT * FROM memory_events WHERE 1=1"
+        params: list[Any] = []
+        if vendor:
+            sql += " AND vendor = ?"
+            params.append(vendor)
+        if event_type:
+            sql += " AND event_type = ?"
+            params.append(event_type)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_latest_memory_event(event_type: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Return the single most recent memory event (optionally filtered by type)."""
+    rows = get_memory_events(limit=1, event_type=event_type)
+    return rows[0] if rows else None
+
+
+# ---------------------------------------------------------------------------
+# Action steps (chat-style negotiation log for the LEFT panel)
+# ---------------------------------------------------------------------------
+
+def log_action_step(entry: dict[str, Any]) -> int:
+    """Append a negotiation step row. Returns the new row id.
+
+    Best-effort: if the DB is absent the call is silently ignored so the
+    agent CLI never breaks.
+    """
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """INSERT INTO action_steps
+               (timestamp, vendor, step_num, step_type, message)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                entry.get("vendor", ""),
+                int(entry.get("step_num", 0)),
+                entry.get("step_type", "info"),
+                entry.get("message", ""),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_action_steps(limit: int = 100, vendor: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return the most recent action steps, newest first."""
+    conn = _connect()
+    try:
+        sql = "SELECT * FROM action_steps WHERE 1=1"
+        params: list[Any] = []
+        if vendor:
+            sql += " AND vendor = ?"
+            params.append(vendor)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_latest_action_steps(limit: int = 100, vendor: Optional[str] = None) -> list[dict[str, Any]]:
+    """Alias for get_action_steps — returns the most recent steps newest first."""
+    return get_action_steps(limit=limit, vendor=vendor)
+
+
+def clear_action_steps(vendor: Optional[str] = None) -> None:
+    """Delete action steps (called at the start of a run to avoid stale clutter)."""
+    conn = _connect()
+    try:
+        if vendor:
+            conn.execute("DELETE FROM action_steps WHERE vendor = ?", (vendor,))
+        else:
+            conn.execute("DELETE FROM action_steps")
         conn.commit()
     finally:
         conn.close()

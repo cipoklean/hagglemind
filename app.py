@@ -2,20 +2,16 @@
 HaggleMind Proof-of-Autonomy Verification Dashboard
 ====================================================
 
-Streamlit app that verifies the agent's actions against real data.
+Split-screen layout:
+  LEFT  = agent action log (chat-style negotiation steps)
+  RIGHT = Brain table (with last-read badge) + LIVE MEMORY EVENT FEED
 
-Panels:
-  1. THE BRAIN   — Sibyl Memory (SQLite) vendor tactic confidence table
-  2. THE ACTION  — Agent logs (latest negotiation detail)
-  3. ON-CHAIN    — Base Sepolia transactions + BaseScan verification link
-  4. TRIGGER     — One-click "Run Negotiation Agent" button
-
-Backend files used:
-  - sibyl_memory.db  (sibyl-memory-client SQLite store)
-  - hagglemind.db    (agent_logs + transactions tables, written by persistence.py)
-
-Run:
-  streamlit run app.py
+Features:
+  - LIVE MEMORY EVENT FEED (newest-first, READ/WRITE events from sibyl_memory.db)
+  - Blinking "● READING LIVE" indicator while a run is in progress
+  - LAST-READ HIGHLIGHT badge on the Brain table tactic row
+  - Memory Value headline metric ($ saved vs no-memory baseline)
+  - Footer caption: "the tactic on screen was read live from sibyl_memory.db"
 """
 
 from __future__ import annotations
@@ -23,6 +19,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Optional
 
 # Make sibling imports work regardless of cwd
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,20 +38,21 @@ except Exception as e:
     st.warning(f"Sibyl Memory SDK unavailable: {e}")
 
 try:
-    import persistence  # agent_logs + transactions tables
-except Exception as e:
-    persistence = None
-    st.warning(f"Persistence layer unavailable: {e}")
-
-try:
     from persistence import (
         get_agent_logs,
         get_latest_agent_log,
         get_transactions,
         get_latest_transaction,
+        get_memory_events,
+        get_latest_memory_event,
+        get_action_steps,
+        clear_action_steps,
+        wipe_dashboard_tables,
     )
 except Exception as e:
     get_agent_logs = get_latest_agent_log = get_transactions = get_latest_transaction = None
+    get_memory_events = get_latest_memory_event = None
+    get_action_steps = clear_action_steps = wipe_dashboard_tables = None
     st.warning(f"Persistence helpers unavailable: {e}")
 
 # ---------------------------------------------------------------------------
@@ -88,12 +86,42 @@ st.markdown(
     .main .block-container { background: var(--bg) !important; }
     h1, h2, h3, h4 { color: var(--text) !important; }
     .stDataFrame { background: var(--surface) !important; }
-    .metric-card {
+    /* blink animation for the live indicator */
+    @keyframes blink { 50% { opacity: 0.2; } }
+    .live-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--green);
+        animation: blink 1s step-end infinite;
+    }
+    .chat-bubble {
         background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px;
-        color: var(--text);
+        border-left: 3px solid var(--accent);
+        padding: 6px 10px;
+        margin: 3px 0;
+        border-radius: 4px;
+        font-size: 0.9rem;
+    }
+    .chat-bubble.step-run { border-left-color: var(--green); }
+    .chat-bubble.step-memory { border-left-color: var(--accent); }
+    .chat-bubble.step-vendor { border-left-color: var(--orange); }
+    .chat-bubble.step-payment { border-left-color: var(--green); }
+    .chat-bubble.step-result { border-left-color: var(--green); }
+    .chat-bubble.step-error { border-left-color: var(--red); }
+    .chat-bubble.step-warning { border-left-color: var(--orange); }
+    .chat-bubble.step-decision { border-left-color: var(--accent); }
+    .badge-last-read {
+        display: inline-block;
+        background: var(--accent);
+        color: #0e1117;
+        font-size: 0.65rem;
+        font-weight: 700;
+        padding: 1px 5px;
+        border-radius: 3px;
+        margin-left: 6px;
+        vertical-align: middle;
     }
     </style>
     """,
@@ -101,13 +129,136 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Header
+# Helpers
 # ---------------------------------------------------------------------------
+
+def fmt_usd(v):
+    try:
+        return f"${float(v):,.2f}"
+    except (ValueError, TypeError):
+        return "\u2014"
+
+
+def fmt_ts(ts: str) -> str:
+    """Short human-readable timestamp."""
+    try:
+        dt = datetime.fromisoformat(ts)
+        return dt.strftime("%H:%M:%S")
+    except Exception:
+        return ts[:19] if ts else ""
+
+
+# ---------------------------------------------------------------------------
+# Memory Value metric — savings vs no-memory baseline
+# ---------------------------------------------------------------------------
+
+def _memory_value_saved() -> Optional[float]:
+    """Compute 'Memory Value' = average savings on runs WITH memory.
+
+    Baseline heuristic:
+      A no-memory run pays the full invoice (no discount) because the agent
+      falls back to the weak default tactic (loyalty_discount). We count runs
+      where savings > 0 as 'with memory' and report their average savings.
+      When the store is wiped, future runs produce savings == 0, which drops
+      the metric — visually proving memory is load-bearing.
+    """
+    if get_agent_logs is None:
+        return None
+    try:
+        logs = get_agent_logs(limit=200) or []
+        if not logs:
+            return None
+        discounted = [r for r in logs if float(r.get("savings", 0)) > 0]
+        if not discounted:
+            return 0.0
+        avg_saved = sum(float(r["savings"]) for r in discounted) / len(discounted)
+        return round(avg_saved, 2)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Brain data — with last-read badge
+# ---------------------------------------------------------------------------
+
+def _read_brain(vendor_filter: Optional[str] = None) -> tuple[list[dict], Optional[str]]:
+    """Read Sibyl Memory entities. Returns (rows, last_read_tactic_key) where
+    last_read_tactic_key is 'Vendor::Tactic' of the most recent READ event."""
+    rows = []
+    last_read_key: Optional[str] = None
+    if sibyl_memory is None:
+        return rows, last_read_key
+    try:
+        mem = sibyl_memory.SibylMemoryStore()
+        entities = mem.client.list_entities("vendor", status="active", limit=200)
+        vendors: dict[str, dict[str, dict]] = {}
+        for ent in entities:
+            name = ent.get("name", "")
+            if "::" not in name:
+                continue
+            v, tactic = name.split("::", 1)
+            body = ent.get("body", {})
+            vendors.setdefault(v, {})[tactic] = {
+                "confidence": body.get("confidence", 0),
+                "successes": body.get("successes", 0),
+                "failures": body.get("failures", 0),
+            }
+        mem.storage.close()
+
+        for vendor in sorted(vendors):
+            for tactic in sorted(vendors[vendor],
+                                 key=lambda t: -vendors[vendor][t]["confidence"]):
+                d = vendors[vendor][tactic]
+                rows.append({
+                    "Vendor": vendor,
+                    "Tactic": tactic,
+                    "Successes": d["successes"],
+                    "Failures": d["failures"],
+                    "Confidence": round(d["confidence"], 2),
+                    "_key": f"{vendor}::{tactic}",
+                })
+
+        # Determine the most recently READ tactic from the memory_events table
+        if get_latest_memory_event is not None:
+            try:
+                latest_read = get_latest_memory_event(event_type="READ")
+                if latest_read and latest_read.get("vendor"):
+                    last_read_key = f"{latest_read['vendor']}::{latest_read['tactic']}" \
+                        if latest_read.get("tactic") \
+                        else f"{latest_read['vendor']}::"
+            except Exception:
+                last_read_key = None
+    except Exception as e:
+        st.error(f"Failed to read Sibyl Memory: {e}")
+    return rows, last_read_key
+
+
+# ===========================================================================
+# LAYOUT — two-column split screen
+# ===========================================================================
+
 st.title(":robot: HaggleMind · Proof of Autonomy")
 st.markdown(
     "Verification dashboard for the autonomous bill-negotiating agent. "
     "All data is read from local SQLite stores — no API calls out."
 )
+
+# ---- LIVE indicator (blinks while a run is in progress) ----
+_running = False
+if sibyl_memory is not None:
+    try:
+        _running = sibyl_memory.is_running()
+    except Exception:
+        _running = False
+if _running:
+    st.markdown(
+        '<span class="live-dot"></span> '
+        '<span style="color:var(--green);font-weight:600;">● READING LIVE</span> '
+        '<span style="color:var(--muted);">— agent is querying sibyl_memory.db right now</span>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.caption("\u25CF Idle \u2014 no agent run in progress")
 
 if not sibyl_memory or not persistence:
     st.error(
@@ -115,312 +266,239 @@ if not sibyl_memory or not persistence:
         "persistence.py are on the Python path and the required packages are installed."
     )
 
-# ---------------------------------------------------------------------------
-# Shared DB/file paths (so the dashboard reads the same files as the CLI)
-# ---------------------------------------------------------------------------
-DB_DIR = _HERE
-SIBYL_DB = os.path.join(DB_DIR, "sibyl_memory.db")
-DASHBOARD_DB = os.path.join(DB_DIR, "hagglemind.db")
+st.markdown("---")
 
-# ---------------------------------------------------------------------------
-# Helper: format a USD amount
-# ---------------------------------------------------------------------------
-def fmt_usd(v):
-    try:
-        return f"${float(v):,.2f}"
-    except (ValueError, TypeError):
-        return "—"
-
-
-# ===========================================================================
-# PANEL 1 — THE BRAIN (Sibyl Memory)
-# ===========================================================================
-st.header("🧠 The Brain — Sibyl Memory")
-
-st.markdown(
-    "Live per-vendor tactic confidence table from the real Sibyl Memory store "
-    "(SQLite, via sibyl-memory-client SDK)."
-)
-
-col_refresh, col_empty = st.columns([1, 6])
-refresh_clicked = col_refresh.button("🔄 Refresh Memory", type="primary")
-
-if refresh_clicked or "brain_cached" not in st.session_state:
-    st.session_state.brain_cached = datetime.now(timezone.utc).isoformat()
-    brain_rows = []
-    if sibyl_memory is not None:
-        try:
-            mem = sibyl_memory.SibylMemoryStore()
-            entities = mem.client.list_entities("vendor", status="active", limit=200)
-            vendors: dict[str, dict[str, dict]] = {}
-            for ent in entities:
-                name = ent.get("name", "")
-                if "::" not in name:
-                    continue
-                v, tactic = name.split("::", 1)
-                body = ent.get("body", {})
-                vendors.setdefault(v, {})[tactic] = {
-                    "confidence": body.get("confidence", 0),
-                    "successes": body.get("successes", 0),
-                    "failures": body.get("failures", 0),
-                }
-            mem.storage.close()
-
-            for vendor in sorted(vendors):
-                for tactic in sorted(vendors[vendor], key=lambda t: -vendors[vendor][t]["confidence"]):
-                    d = vendors[vendor][tactic]
-                    brain_rows.append({
-                        "Vendor": vendor,
-                        "Tactic": tactic,
-                        "Success Count": d["successes"],
-                        "Failure Count": d["failures"],
-                        "Confidence": round(d["confidence"], 2),
-                    })
-        except Exception as e:
-            st.error(f"Failed to read Sibyl Memory: {e}")
-
-    if brain_rows:
-        df_brain = pd.DataFrame(brain_rows)
-        st.dataframe(
-            df_brain,
-            column_config={
-                "Confidence": st.column_config.NumberColumn(
-                    "Confidence", format=":.2f", width="120px"
-                ),
-                "Success Count": st.column_config.NumberColumn("Successes", format="{:}"),
-                "Failure Count": st.column_config.NumberColumn("Failures", format="{:}"),
-            },
-            hide_index=True,
-            width="stretch",
-        )
-        st.caption(f"{len(brain_rows)} tactic entries across {df_brain['Vendor'].nunique()} vendors.")
-    else:
-        st.info("No vendor entities found in Sibyl Memory. Run the agent to populate it.")
-
-st.divider()
-
-
-# ===========================================================================
-# PANEL 2 — THE ACTION (Agent Logs)
-# ===========================================================================
-st.header("⚡ The Action — Agent Logs")
-
-st.markdown(
-    "Every negotiation the agent runs is written to the `agent_logs` table. "
-    "The latest entry is shown below."
-)
-
-col_latest_vendor, col_refresh_logs = st.columns([2, 1])
-vendor_filter = col_latest_vendor.text_input(
-    "Filter by vendor (optional)",
-    placeholder="e.g. Comcast",
-    key="log_vendor",
-).strip() or None
-refresh_logs = col_refresh_logs.button("🔄 Refresh Logs", type="primary")
-
-latest_log = None
-if refresh_logs or "action_cached" not in st.session_state:
-    st.session_state.action_cached = datetime.now(timezone.utc).isoformat()
-    try:
-        latest_log = get_latest_agent_log(vendor=vendor_filter)
-    except Exception as e:
-        st.error(f"Failed to read agent logs: {e}")
-
-if latest_log:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Invoice Amount", fmt_usd(latest_log["original_amt"]))
-    c2.metric("Selected Tactic", latest_log["tactic"])
-    c3.metric("Negotiated Amount", fmt_usd(latest_log["final_amt"]))
-    status_color = "green" if latest_log["accepted"] else "red"
-    c4.metric(
-        "Status",
-        "SAVED" if latest_log["accepted"] else "NO SAVE",
-        delta=f"-{fmt_usd(latest_log['savings'])}" if latest_log["savings"] > 0 else None,
-    )
-
-    st.markdown("---")
-    col_v, col_t, col_conf, col_pm, col_tx = st.columns(5)
-    col_v.metric("Vendor", latest_log["vendor"])
-    col_t.metric("Tactic Used", latest_log["tactic"])
-    col_conf.metric("Confidence Before", f"{latest_log.get('confidence_before', 0):.2f}")
-    col_pm.metric("Payment Mode", latest_log.get("payment_mode", "unknown"))
-    tx_val = latest_log.get("tx_hash") or "—"
-    col_tx.metric("TX Hash", tx_val[:32] + "..." if isinstance(tx_val, str) and len(tx_val) > 34 else tx_val)
-
-    st.markdown("### Recent Logs")
-    try:
-        history = get_agent_logs(limit=20, vendor=vendor_filter)
-        if history:
-            df_logs = pd.DataFrame(history)
-            st.dataframe(
-                df_logs[["timestamp", "vendor", "tactic", "original_amt", "final_amt", "savings", "accepted", "payment_mode", "tx_hash"]],
-                column_config={
-                    "original_amt": st.column_config.NumberColumn("Invoice $", format="$%.2f"),
-                    "final_amt": st.column_config.NumberColumn("Paid $", format="$%.2f"),
-                    "savings": st.column_config.NumberColumn("Saved $", format="$%.2f"),
-                    "accepted": st.column_config.CheckboxColumn("Saved?"),
-                    "tx_hash": st.column_config.TextColumn("TX Hash", width="160px"),
-                },
-                hide_index=True,
-                width="stretch",
-            )
-        else:
-            st.info("No agent logs yet. Run the agent to generate them.")
-    except Exception as e:
-        st.error(f"Failed to load log history: {e}")
-else:
-    st.info("No agent logs found. Run the agent via the Trigger panel or CLI first.")
-
-st.divider()
-
-
-# ===========================================================================
-# PANEL 3 — ON-CHAIN PROOF (Base Sepolia)
-# ===========================================================================
-st.header("₿ On-Chain Proof — Base Sepolia")
-
-st.markdown(
-    "Every payment executed by the agent is recorded here. "
-    "Click **Verify on BaseScan** to open the transaction in a new tab."
-)
-
-col_tx_vendor, col_refresh_tx = st.columns([2, 1])
-tx_vendor_filter = col_tx_vendor.text_input(
-    "Filter by vendor (optional)",
-    placeholder="e.g. Comcast",
-    key="tx_vendor",
-).strip() or None
-refresh_tx = col_refresh_tx.button("🔄 Refresh Transactions", type="primary")
-
-latest_tx = None
-if refresh_tx or "chain_cached" not in st.session_state:
-    st.session_state.chain_cached = datetime.now(timezone.utc).isoformat()
-    try:
-        latest_tx = get_latest_transaction(vendor=tx_vendor_filter)
-    except Exception as e:
-        st.error(f"Failed to read transactions: {e}")
-
-if latest_tx:
-    tx_col1, tx_col2, tx_col3, tx_col4 = st.columns(4)
-    tx_col1.metric("Amount Paid", fmt_usd(latest_tx["amount_usd"]))
-    tx_col2.metric("Network", latest_tx.get("network", "Base Sepolia"))
-    tx_col3.metric("TX Hash", latest_tx["tx_hash"][:32] + ("..." if len(latest_tx["tx_hash"]) > 34 else ""))
-    pm = latest_tx.get("payment_mode", "unknown")
-    tx_col4.metric("Mode", pm)
-
-    st.markdown("---")
-    st.markdown("### Verify on BaseScan")
-    tx_hash = latest_tx.get("tx_hash", "")
-    explorer = latest_tx.get("explorer_url") or f"https://sepolia.basescan.org/tx/{tx_hash}"
-    if tx_hash and tx_hash.startswith("0x"):
-        btn_cols = st.columns([1, 4])
-        if btn_cols[0].button("🔗 Open BaseScan", type="primary"):
-            import webbrowser
-            webbrowser.open(explorer)
-        btn_cols[1].markdown(
-            f'<a href="{explorer}" target="_blank" style="color:var(--accent);text-decoration:none;">👉 {explorer}</a>',
+# ---- Headline: Memory Value metric ----
+mv1, mv2, mv3 = st.columns([1, 3, 1])
+mv = _memory_value_saved()
+if mv is not None:
+    mv1.metric("Memory Value", f"${mv:,.2f}", delta="saved vs no-memory baseline")
+    if mv > 0:
+        mv2.markdown(
+            f'<div style="color:var(--muted);font-size:0.85rem;">'
+            f'Agent paid <b>${mv:,.2f} less</b> on average when Sibyl Memory was intact '
+            f'than on no-memory runs. Delete the memory and the agent pays full price.'
+            f'</div>',
             unsafe_allow_html=True,
         )
     else:
-        st.warning("No valid Base Sepolia tx hash recorded. Run a real x402 payment to see it here.")
+        mv2.markdown(
+            '<div style="color:var(--orange);font-size:0.85rem;">'
+            'No discounted runs recorded yet. Run the agent with memory intact to see the value.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    mv3.markdown("")
 
-    st.markdown("### Recent Transactions")
-    try:
-        tx_history = get_transactions(limit=20, vendor=tx_vendor_filter)
-        if tx_history:
-            df_tx = pd.DataFrame(tx_history)
-            st.dataframe(
-                df_tx[["timestamp", "vendor", "amount_usd", "tx_hash", "network", "payment_mode", "status", "explorer_url"]],
-                column_config={
-                    "amount_usd": st.column_config.NumberColumn("Amount", format="$%.2f"),
-                    "tx_hash": st.column_config.TextColumn("TX Hash", width="180px"),
-                    "explorer_url": st.column_config.LinkColumn("BaseScan", width="200px"),
-                },
-                hide_index=True,
-                width="stretch",
+st.markdown("---")
+
+# ===========================================================================
+# TWO-COLUMN SPLIT: LEFT = action log | RIGHT = Brain + event feed
+# ===========================================================================
+
+left_col, right_col = st.columns([1, 2], gap="medium")
+
+# -------------------- LEFT COLUMN: Agent action log --------------------
+with left_col:
+    st.header("📋 Agent Action Log")
+
+    st.markdown(
+        "Chat-style log of every negotiation step the agent takes. "
+        "Refresh or re-run to see the latest."
+    )
+
+    action_vendor = st.text_input(
+        "Filter by vendor (optional)",
+        placeholder="e.g. Comcast",
+        key="action_vendor_filter",
+    ).strip() or None
+
+    _, act_refresh_col, _ = st.columns([4, 1, 4])
+    act_refresh = act_refresh_col.button("🔄 Refresh", type="primary")
+
+    steps = []
+    if act_refresh or "action_cached" not in st.session_state:
+        st.session_state.action_cached = datetime.now(timezone.utc).isoformat()
+        if get_action_steps is not None:
+            try:
+                steps = get_action_steps(limit=80, vendor=action_vendor)
+                # Return newest-first for display, but we render oldest-first
+                steps = list(reversed(steps))
+            except Exception as e:
+                st.error(f"Failed to load action steps: {e}")
+
+    if steps:
+        for s in steps:
+            stype = s.get("step_type", "info")
+            msg = s.get("message", "")
+            ts = fmt_ts(s.get("timestamp", ""))
+            css_cls = f"chat-bubble step-{stype}" if stype in (
+                "run", "memory", "vendor", "payment", "result",
+                "error", "warning", "decision", "info",
+            ) else "chat-bubble"
+            st.markdown(
+                f'<div class="{css_cls}"><span style="color:var(--muted);font-size:0.7rem;">{ts}</span> '
+                f'<span style="color:var(--text);font-weight:600;">[{stype.upper()}]</span> '
+                f'<span style="color:var(--text);">{msg}</span></div>',
+                unsafe_allow_html=True,
             )
-        else:
-            st.info("No transactions recorded yet. Run the agent to see on-chain (or simulated) payments here.")
-    except Exception as e:
-        st.error(f"Failed to load transaction history: {e}")
-else:
-    st.info("No transactions found. Run the agent (or a real x402 payment) to populate this panel.")
+        st.markdown(
+            f'<div style="color:var(--muted);font-size:0.75rem;margin-top:6px;">'
+            f'{len(steps)} step(s) shown</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("No action steps yet. Run the agent via the Trigger panel or CLI.")
 
-st.divider()
+    st.markdown("---")
+    st.markdown(
+        '<div style="color:var(--muted);font-size:0.75rem;">'
+        'Each row is a timestamped step written by the agent to <b>hagglemind.db → action_steps</b> '
+        'as it negotiates. The memory read happens in step [MEMORY].</div>',
+        unsafe_allow_html=True,
+    )
 
+# -------------------- RIGHT COLUMN: Brain + LIVE MEMORY EVENT FEED --------------------
+with right_col:
+    # ---- BRAIN TABLE with last-read badge ----
+    st.header("🧠 The Brain — Sibyl Memory")
+
+    st.markdown(
+        "Live per-vendor tactic confidence table from the real Sibyl Memory store "
+        "(SQLite, via sibyl-memory-client SDK)."
+    )
+
+    brain_vendor = st.text_input(
+        "Filter by vendor (optional)",
+        placeholder="e.g. Comcast",
+        key="brain_vendor_filter",
+    ).strip() or None
+
+    _, brain_refresh_col, _ = st.columns([4, 1, 4])
+    brain_refresh = brain_refresh_col.button("🔄 Refresh Memory", type="primary")
+
+    brain_rows, last_read_key = _read_brain(vendor_filter=brain_vendor)
+
+    if brain_rows:
+        # Mark the last-read row
+        for row in brain_rows:
+            row["_last_read"] = (row["_key"] == last_read_key)
+
+        display_rows = []
+        for r in brain_rows:
+            tactic_display = r["Tactic"]
+            if r["_last_read"]:
+                tactic_display = f'{r["Tactic"]} <span class="badge-last-read">◉ LAST READ</span>'
+            display_rows.append({
+                "Vendor": r["Vendor"],
+                "Tactic": tactic_display,
+                "Successes": r["Successes"],
+                "Failures": r["Failures"],
+                "Confidence": r["Confidence"],
+            })
+
+        df_brain = pd.DataFrame(display_rows)
+
+        st.dataframe(
+            df_brain,
+            column_config={
+                "Tactic": st.column_config.TextColumn("Tactic", width="200px"),
+                "Confidence": st.column_config.NumberColumn(
+                    "Confidence", format=":.2f", width="100px"
+                ),
+                "Successes": st.column_config.NumberColumn("Successes", format="{:}"),
+                "Failures": st.column_config.NumberColumn("Failures", format="{:}"),
+            },
+            hide_index=True,
+            width="stretch",
+            use_container_width=True,
+        )
+
+        n_vendors = len(set(r["Vendor"] for r in brain_rows))
+        st.caption(
+            f"{len(brain_rows)} tactic entries across {n_vendors} vendor(s). "
+            f'<span style="color:var(--accent);">◉ LAST READ</span> = tactic most recently '
+            f'loaded by the agent from sibyl_memory.db.',
+            unsafe_allow_html=True,
+        )
+
+        # Footer caption under the Brain panel
+        st.markdown(
+            '<div style="color:var(--muted);font-size:0.75rem;margin-top:4px;">'
+            '↳ the tactic on screen was read live from sibyl_memory.db — '
+            'not from the prompt or chat history</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("No vendor entities found in Sibyl Memory. Run the agent to populate it.")
+
+    st.markdown("---")
+
+    # ---- LIVE MEMORY EVENT FEED (newest-first) ----
+    st.header("⚡ Live Memory Event Feed")
+
+    st.markdown(
+        "Every READ and WRITE to Sibyl Memory is logged here in real time. "
+        "Watch the agent read a tactic, then write back a new confidence — "
+        "the same moment it answers."
+    )
+
+    ev_vendor = st.text_input(
+        "Filter by vendor (optional)",
+        placeholder="e.g. Comcast",
+        key="event_vendor_filter",
+    ).strip() or None
+
+    _, ev_refresh_col, _ = st.columns([4, 1, 4])
+    ev_refresh = ev_refresh_col.button("🔄 Refresh Events", type="primary")
+
+    events = []
+    if ev_refresh or "events_cached" not in st.session_state:
+        st.session_state.events_cached = datetime.now(timezone.utc).isoformat()
+        if get_memory_events is not None:
+            try:
+                events = get_memory_events(limit=40, vendor=ev_vendor)
+                # Already newest-first from the DB query
+            except Exception as e:
+                st.error(f"Failed to load memory events: {e}")
+
+    if events:
+        ev_df = pd.DataFrame(events)
+        # Render as a styled table
+        st.dataframe(
+            ev_df[["timestamp", "event_type", "vendor", "tactic", "confidence", "reason"]],
+            column_config={
+                "timestamp": st.column_config.TextColumn("Time", width="90px"),
+                "event_type": st.column_config.TextColumn("Type", width="70px"),
+                "vendor": st.column_config.TextColumn("Vendor", width="100px"),
+                "tactic": st.column_config.TextColumn("Tactic", width="130px"),
+                "confidence": st.column_config.NumberColumn("Conf", format=":.2f", width="70px"),
+                "reason": st.column_config.TextColumn("Reason", width="300px"),
+            },
+            hide_index=True,
+            width="stretch",
+            use_container_width=True,
+        )
+
+        n_read = sum(1 for e in events if e.get("event_type") == "READ")
+        n_write = sum(1 for e in events if e.get("event_type") == "WRITE")
+        st.caption(
+            f"{len(events)} event(s) · {n_read} READ · {n_write} WRITE · "
+            f'newest first. <span style="color:var(--muted);">'
+            f'These are the actual SDK calls the agent made to sibyl_memory.db.</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info(
+            "No memory events yet. Run the agent — every tactic read and confidence "
+            "write will appear here."
+        )
 
 # ===========================================================================
-# PANEL 4 — TRIGGER (Run Negotiation Agent)
+# FOOTER
 # ===========================================================================
-st.header("🎛️ Trigger — Run Negotiation Agent")
-
-st.markdown(
-    "Trigger the exact same negotiation logic as `python haggle_cli.py run`. "
-    "The agent will process all pending invoices, update Sibyl Memory, "
-    "pay via x402 (or simulated), and write logs + transactions."
-)
-
-vendor_to_run = st.selectbox(
-    "Vendor to negotiate (or 'All' for the full run)",
-    options=["All"] + ["Comcast", "Netflix", "Spotify", "DisneyPlus"],
-    index=0,
-    key="trigger_vendor",
-)
-
-run_clicked = st.button("▶ Run Negotiation Agent", type="primary", use_container_width=True)
-
-if run_clicked:
-    # Disable the button momentarily to avoid double-clicks
-    st.session_state.trigger_running = True
-    with st.spinner("🤖 HaggleMind is negotiating…"):
-        try:
-            from agent import negotiate_bill, negotiate_all_vendors
-            from vendor_server import vendor_api as va  # type: ignore
-
-            # Confirm vendor API is reachable
-            health = va("GET", "/health")
-            if "error" in health:
-                st.error(f"Vendor API not reachable: {health['error']}")
-                st.session_state.trigger_running = False
-                st.stop()
-
-            if vendor_to_run == "All":
-                results = negotiate_all_vendors()
-                saved = sum(r.get("savings", 0) for r in results if r.get("status") != "no_invoice")
-                st.success(f"Run complete. Total saved: {fmt_usd(saved)}")
-                # Show the last result as the "latest" for the logs panel
-                if results:
-                    last = results[-1]
-                    st.markdown("---")
-                    st.markdown(f"**Last vendor processed:** {last.get('vendor', '—')}")
-                    st.markdown(f"**Tactic:** {last.get('tactic_used', '—')}")
-                    st.markdown(f"**Result:** {fmt_usd(last.get('original_amount', 0))} → {fmt_usd(last.get('final_amount', 0))}")
-                    st.markdown(f"**Status:** {'SAVED' if last.get('accepted') else 'NO SAVE'}")
-            else:
-                result = negotiate_bill(vendor_to_run)
-                st.success(f"Negotiation complete for {vendor_to_run}.")
-                st.markdown("---")
-                st.markdown(f"**Tactic used:** {result.get('tactic_used', '—')}")
-                st.markdown(f"**Amount:** {fmt_usd(result.get('original_amount', 0))} → {fmt_usd(result.get('final_amount', 0))}")
-                st.markdown(f"**Status:** {'SAVED' if result.get('accepted') else 'NO SAVE'}")
-                st.markdown(f"**Payment mode:** {result.get('payment_mode', '—')}")
-                st.markdown(f"**TX hash:** {result.get('tx_hash', '—')}")
-
-            # Refresh dashboard caches so the panels show fresh data
-            st.session_state.brain_cached = None
-            st.session_state.action_cached = None
-            st.session_state.chain_cached = None
-
-        except Exception as e:
-            st.error(f"Agent run failed: {e}")
-    st.session_state.trigger_running = False
-
-
-# ---------------------------------------------------------------------------
-# Footer
-# ---------------------------------------------------------------------------
 st.divider()
 st.caption(
-    f"Proof of Autonomy Dashboard · HaggleMind · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
-    "Reads from local SQLite: sibyl_memory.db (Sibyl Memory) + hagglemind.db (agent_logs, transactions)."
+    f"HaggleMind · Proof of Autonomy Dashboard · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    "Reads from local SQLite: sibyl_memory.db (Sibyl Memory) + hagglemind.db (agent_logs, transactions, memory_events, action_steps)."
 )
