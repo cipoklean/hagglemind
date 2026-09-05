@@ -11,6 +11,7 @@ Hidden rules can be changed via the /chaos endpoint (called by the Time-Machine 
 """
 
 import json
+import os
 import random
 import time
 from datetime import datetime, timezone
@@ -20,6 +21,13 @@ from urllib.parse import urlparse, parse_qs
 import requests
 import base64
 
+# Load .env automatically so X402_ENABLED, VENDOR_BURNER_WALLET, etc. are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -27,9 +35,9 @@ PORT = 8777
 VENDOR_SERVER_URL = f"http://localhost:{PORT}"
 
 # x402 config — enable x402 payment-gating on the /pay-x402 endpoint
-X402_ENABLED = False  # Set True when you have the x402 SDK + a facilitator
-X402_FACILITATOR_URL = "https://x402.org/facilitator"
-X402_RECEIVER_ADDRESS = "0xYourBaseSepoliaAddressHere"  # Set to your wallet
+X402_ENABLED = os.environ.get("X402_ENABLED", "false").lower() == "true"  # Read from .env; fallback False
+X402_FACILITATOR_URL = os.environ.get("X402_FACILITATOR_URL", "https://x402.org/facilitator")
+X402_RECEIVER_ADDRESS = os.environ.get("VENDOR_BURNER_WALLET", "0xYourBaseSepoliaAddressHere")  # From .env
 
 # Default hidden rules per vendor. The agent NEVER sees these — it only sees
 # the accept/reject response and must infer what works from the Sibyl Memory SDK.
@@ -333,9 +341,10 @@ class VendorHandler(BaseHTTPRequestHandler):
     def _handle_x402_pay(self, data: dict):
         """Handle x402 payment-gated request on /pay-x402.
 
-        If the request has no PAYMENT-SIGNATURE header, return 402 with
-        PAYMENT-REQUIRED header containing payment specs.
-        If the request has a valid signature, accept the payment.
+        Emits a canonical (camelCase) x402 PaymentRequired in the 402
+        PAYMENT-REQUIRED header so the client SDK can parse it directly.
+        The client-side snake_case normalizer in x402_payment.py is kept as
+        tolerance for off-spec third-party vendors only.
         """
         vendor = data.get("vendor", "")
         amount_usd = float(data.get("amount_usd", 0))
@@ -344,30 +353,32 @@ class VendorHandler(BaseHTTPRequestHandler):
         sig_header = self.headers.get("PAYMENT-SIGNATURE") or self.headers.get("payment-signature")
 
         if not sig_header:
-            # Return 402 Payment Required
-            import base64
-            from datetime import datetime, timezone
-
-            # Build PaymentRequired V2
+            # Emit canonical x402 PaymentRequired (camelCase wire format).
+            # USDC on Base Sepolia: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+            # (Circle docs / Blockscout). Amount is in atomic units (6 decimals):
+            #   dollars * 1_000_000, as a string (never a float).
+            usdc_atomic = str(int(round(amount_usd * 1_000_000)))
+            now_s = int(time.time())
             payment_required = {
-                "x402_version": 2,
+                "x402Version": 1,
                 "accepts": [
                     {
-                        "network": "eip155:84532",  # Base Sepolia
-                        "price": {
-                            "amount": str(amount_usd),
-                            "asset": "usdc",
-                            "decimals": 6,
-                        },
-                        "payTo": X402_RECEIVER_ADDRESS,
                         "scheme": "exact",
+                        "network": "eip155:84532",
+                        "maxAmountRequired": usdc_atomic,
+                        "resource": f"{VENDOR_SERVER_URL}/pay-x402",
+                        "description": f"Payment for {vendor} bill",
+                        "mimeType": "application/json",
+                        "payTo": X402_RECEIVER_ADDRESS,
+                        "maxTimeoutSeconds": 300,
+                        "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "extra": {
+                            "name": "USD Coin",
+                            "version": "2",
+                            "description": "USDC on Base Sepolia (testnet) — Circle-issued",
+                        },
                     }
                 ],
-                "resource": {
-                    "path": "/pay-x402",
-                    "method": "POST",
-                },
-                "extensions": {},
             }
 
             pr_b64 = base64.b64encode(json.dumps(payment_required).encode()).decode()
@@ -383,8 +394,8 @@ class VendorHandler(BaseHTTPRequestHandler):
             }, indent=2).encode())
             return
 
-        # Verify signature (simplified — real impl would verify on-chain)
-        # For the demo, accept any signature as valid
+        # Verify signature (simplified — real impl would verify on-chain).
+        # For the demo, accept any signature as valid.
         print(f"[vendor] x402 payment received for {vendor}: ${amount_usd:.2f}")
         print(f"[vendor] Signature: {sig_header[:50]}...")
 

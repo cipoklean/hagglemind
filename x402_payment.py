@@ -23,6 +23,13 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+# Load .env automatically so X402_ENABLED, VENDOR_BURNER_WALLET, etc. are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 import requests
 
 # ---------------------------------------------------------------------------
@@ -93,6 +100,64 @@ def get_wallet_address() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Snake-case -> camelCase normalization for off-spec vendors
+# ---------------------------------------------------------------------------
+_SNAKE_TO_CAMEL_TOP = {
+    "x402_version": "x402Version",
+    "resource": "resource",  # passthrough (handled below if dict)
+}
+_SNAKE_TO_CAMEL_ACCEPT = {
+    "max_amount_required": "maxAmountRequired",
+    "min_amount_required": "minAmountRequired",
+    "max_timeout_seconds": "maxTimeoutSeconds",
+    "pay_to": "payTo",
+    "mime_type": "mimeType",
+    "description": "description",
+    "asset": "asset",
+    "scheme": "scheme",
+    "network": "network",
+    "output_schema": "outputSchema",
+    "extra": "extra",
+}
+
+
+def _rename(d: dict, old: str, new: str) -> None:
+    if old in d and new not in d:
+        d[new] = d.pop(old)
+
+
+def _normalize_payment_required(decoded: dict) -> dict:
+    """Normalize snake_case PaymentRequired variants to the SDK's camelCase
+    model aliases. Works for both V1 (PaymentRequiredV1) and V2
+    (PaymentRequired) wire shapes, including V1 accept entries that carry
+    maxAmountRequired / mimeType / resource-as-string.
+    """
+    out = dict(decoded)
+    _rename(out, "x402_version", "x402Version")
+    resource = out.get("resource")
+    if isinstance(resource, dict):
+        out["resource"] = _normalize_resource(resource)
+    accepts = out.get("accepts")
+    if isinstance(accepts, list):
+        out["accepts"] = [_normalize_accept(a) for a in accepts]
+    return out
+
+
+def _normalize_resource(d: dict) -> dict:
+    out = dict(d)
+    _rename(out, "mime_type", "mimeType")
+    _rename(out, "service_name", "serviceName")
+    _rename(out, "icon_url", "iconUrl")
+    return out
+
+
+def _normalize_accept(d: dict) -> dict:
+    out = dict(d)
+    for snake, camel in _SNAKE_TO_CAMEL_ACCEPT.items():
+        _rename(out, snake, camel)
+    # resource inside an accept is a plain string URL in V1 — leave as-is.
+    return out
+# ---------------------------------------------------------------------------
 # Real x402 payment on Base Sepolia
 # ---------------------------------------------------------------------------
 
@@ -152,15 +217,15 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
     print(f"[x402] Payer wallet: {account.address}")
 
     # --- Build x402 client with EVM signer ---
+    # ExactEvmScheme accepts a web3 LocalAccount (auto-wrapped in EthAccountSigner
+    # by the SDK). It signs EIP-712 typed data internally (domain: name="USD Coin",
+    # version="2", chainId=84532, verifyingContract=USDC), producing the EIP-3009
+    # authorization signature. The vendor emits the CAIP-2 network identifier
+    # "eip155:84532" (Base Sepolia) which both the scheme-selection path and the
+    # signing path (get_evm_chain_id) understand, so register on that exact value.
     client = x402ClientSync()
-
-    def evm_signer(signable: str) -> str:
-        message_hash = w3.eth.account.hash_message(signable)
-        signed = w3.eth.account.sign_hash(message_hash, private_key=PRIVATE_KEY)
-        return signed.signature.hex()
-
-    client.register("eip155:84532", ExactEvmScheme(signer=evm_signer))
-    print("[x402] x402ClientSync registered with ExactEvmScheme on Base Sepolia")
+    client.register_v1("eip155:84532", ExactEvmScheme(account))
+    print("[x402] x402ClientSync registered ExactEvmScheme(account) on eip155:84532 (payer={})".format(account.address))
 
     # --- Step 1: Make the payment-gated request ---
     print(f"\n[x402] Step 1: POST {VENDOR_URL}/pay-x402")
@@ -225,28 +290,51 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
             "error": "402 response missing PAYMENT-REQUIRED header",
         }
 
+    # PAYMENT-REQUIRED is base64-encoded JSON — decode and normalize for the SDK.
+    # Vendors may emit either canonical camelCase or common snake_case variants;
+    # normalize snake_case -> camelCase so parse_payment_required always succeeds.
+    if isinstance(pr_header, str):
+        try:
+            decoded = json.loads(base64.b64decode(pr_header))
+        except Exception as e:
+            print(f"[x402] ERROR decoding PAYMENT-REQUIRED (base64/json): {e}")
+            print(f"[x402] Raw header: {pr_header[:100]}")
+            print(f"[x402] WARN: parse failure — falling back to direct /pay")
+            return _execute_fallback_payment(vendor, amount_usd)
+        pr_header = _normalize_payment_required(decoded)
+
     try:
         payment_required = parse_payment_required(pr_header)
-        print(f"[x402] PaymentRequired:")
+
+        # V1 PaymentRequirementsV1 carries max_amount_required, not amount.
+        # The SDK's ExactEvmScheme.create_payment_payload reads requirements.amount
+        # for the EIP-3009 authorization value, so inject .amount onto each V1
+        # accept (V2 accepts already have .amount natively).
+        for _acc in payment_required.accepts:
+            if not hasattr(_acc, "amount"):
+                object.__setattr__(_acc, "amount", _acc.max_amount_required)
+
+        print(f"[x402] PaymentRequired parsed:")
         print(f"  version: {payment_required.x402_version}")
         print(f"  accepts: {len(payment_required.accepts)} options")
         for i, accept in enumerate(payment_required.accepts):
-            print(f"    [{i}] network={accept.network} price={accept.price} payTo={accept.payTo}")
+            amt = getattr(accept, "amount", None) or getattr(accept, "max_amount_required", "?")
+            print(f"    [{i}] network={accept.network} amount={amt} "
+                  f"asset={accept.asset} payTo={accept.pay_to} "
+                  f"maxTimeoutSeconds={accept.max_timeout_seconds}")
+            if accept.extra:
+                print(f"         extra={accept.extra}")
     except Exception as e:
         print(f"[x402] ERROR parsing PaymentRequired: {e}")
-        return {
-            "paid": False,
-            "amount": amount_usd,
-            "vendor": vendor,
-            "mode": "parse_error",
-            "error": f"Failed to parse PAYMENT-REQUIRED: {e}",
-        }
+        print(f"[x402] WARN: parse failure — falling back to direct /pay")
+        return _execute_fallback_payment(vendor, amount_usd)
 
     # --- Step 4: Create PaymentPayload ---
-    print(f"\n[x402] Step 3: Creating PaymentPayload...")
+    print(f"\n[x402] Step 3: Creating PaymentPayload via x402ClientSync.create_payment_payload...")
     try:
         payment_payload = client.create_payment_payload(payment_required)
-        print(f"[x402] PaymentPayload created (x402_version={payment_payload.x402_version})")
+        version = getattr(payment_payload, "x402_version", None) or getattr(payment_payload, "x402Version", None)
+        print(f"[x402] PaymentPayload created (x402_version={version})")
     except Exception as e:
         print(f"[x402] ERROR creating payment payload: {e}")
         import traceback
@@ -262,32 +350,34 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
     # --- Step 5: Resubmit with PAYMENT-SIGNATURE ---
     print(f"\n[x402] Step 4: Resubmitting with signed PAYMENT-SIGNATURE...")
 
-    serialization_methods = [
-        ("model_dump_json", lambda p: p.model_dump_json().encode()),
-        ("json", lambda p: p.json().encode()),
-        ("dict", lambda p: json.dumps(p.__dict__ if hasattr(p, '__dict__') else p, default=str).encode()),
-    ]
+    # ExactEvmScheme.create_payment_payload returns a Pydantic PaymentPayloadV1
+    # model. The SDK signed the EIP-3009 authorization internally via EIP-712
+    # (domain: name="USD Coin", version="2", chainId=84532,
+    # verifyingContract=0x036CbD53842c5426634e7929541eC2318f3dCF7e) and stored
+    # the real 0x-prefixed hex signature inside the inner payload dict.
+    #
+    # Extraction path: payment_payload.payload  -> inner dict (ExactEIP3009Payload.to_dict())
+    #   -> ["signature"]  -> "0x" + 65-byte-ecdsa-hex  (the EIP-3009 authorization signature)
+    #
+    # This is the value the vendor expects in the PAYMENT-SIGNATURE header, NOT a
+    # base64-of-serialized-model (which was the previous broken path).
 
-    payload_bytes = None
-    for method_name, serializer in serialization_methods:
-        try:
-            payload_bytes = serializer(payment_payload)
-            print(f"[x402] Serialized via {method_name} ({len(payload_bytes)} bytes)")
-            break
-        except Exception:
-            continue
+    def _extract_signature(pp) -> str:
+        """Return the EIP-3009 authorization signature hex from a PaymentPayload model."""
+        pp_dict = pp.model_dump() if hasattr(pp, "model_dump") else dict(pp)
+        inner = pp_dict.get("payload", {})
+        if isinstance(inner, dict):
+            sig = inner.get("signature", "")
+            if sig:
+                return str(sig)
+        # fallback: some SDK versions put signature at top level
+        if "signature" in pp_dict and pp_dict["signature"]:
+            return str(pp_dict["signature"])
+        raise RuntimeError("PaymentPayload has no signature field — SDK signing may have failed")
 
-    if payload_bytes is None:
-        print(f"[x402] ERROR: Could not serialize PaymentPayload")
-        return {
-            "paid": False,
-            "amount": amount_usd,
-            "vendor": vendor,
-            "mode": "serialize_error",
-            "error": "Could not serialize PaymentPayload",
-        }
-
-    signature_b64 = base64.b64encode(payload_bytes).decode()
+    sig_value = _extract_signature(payment_payload)
+    print(f"[x402] Extracted EIP-3009 signature ({len(sig_value)} chars)")
+    print(f"[x402] PAYMENT-SIGNATURE header: {sig_value[:60]}...")
 
     try:
         r2 = requests.post(
@@ -295,7 +385,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                "PAYMENT-SIGNATURE": signature_b64,
+                "PAYMENT-SIGNATURE": sig_value,
             },
             timeout=15,
         )
