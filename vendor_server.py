@@ -399,11 +399,19 @@ class VendorHandler(BaseHTTPRequestHandler):
         print(f"[vendor] x402 payment received for {vendor}: ${amount_usd:.2f}")
         print(f"[vendor] Signature: {sig_header[:50]}...")
 
-        # Accept payment
+        # Accept payment — use the real tx hash the client broadcast to Base Sepolia,
+        # falling back to a vendor-generated marker only if the client didn't send one.
         result = pay_invoice(vendor, amount_usd)
-        result["tx_hash"] = f"0x_vendor_x402_{vendor}_{int(time.time())}_{random.randint(10000, 99999)}"
-        result["mode"] = "x402_verified"
-        result["settled_by"] = "vendor_server_x402"
+        _incoming_tx_hash = data.get("tx_hash", "")
+        if _incoming_tx_hash and _incoming_tx_hash.startswith("0x") and len(_incoming_tx_hash) == 66:
+            result["tx_hash"] = _incoming_tx_hash
+            result["mode"] = "x402_onchain"
+            result["settled_by"] = "client_broadcast"
+            print(f"[vendor] Real on-chain tx recorded: {result['tx_hash']}")
+        else:
+            result["tx_hash"] = f"0x_vendor_x402_{vendor}_{int(time.time())}_{random.randint(10000, 99999)}"
+            result["mode"] = "x402_verified"
+            result["settled_by"] = "vendor_server_x402"
 
         self._send_json(result)
 

@@ -310,9 +310,24 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
         # The SDK's ExactEvmScheme.create_payment_payload reads requirements.amount
         # for the EIP-3009 authorization value, so inject .amount onto each V1
         # accept (V2 accepts already have .amount natively).
+        #
+        # Also override the EIP-712 domain name with the USDC contract's actual
+        # on-chain name() so the signature verifies against the deployed FiatTokenV2.
+        # The vendor may advertise "USD Coin" in extra, but the contract returns
+        # "USDC" — and EIP-712 domain name must match exactly or the contract
+        # reverts with "invalid signature". Fetch name from chain, keep version
+        # from the vendor's extra (both should be "2" for FiatTokenV2).
         for _acc in payment_required.accepts:
             if not hasattr(_acc, "amount"):
                 object.__setattr__(_acc, "amount", _acc.max_amount_required)
+            if _acc.extra:
+                try:
+                    _usdc_abi = [{"inputs": [], "name": "name", "outputs": [{"type": "string"}], "stateMutability": "view", "type": "function"}]
+                    _u = w3.eth.contract(address=w3.to_checksum_address("0x036CbD53842c5426634e7929541eC2318f3dCF7e"), abi=_usdc_abi)
+                    _real_name = _u.functions.name().call()
+                    _acc.extra["name"] = _real_name
+                except Exception:
+                    pass  # leave vendor's name as-is if chain query fails
 
         print(f"[x402] PaymentRequired parsed:")
         print(f"  version: {payment_required.x402_version}")
@@ -347,20 +362,21 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
             "error": f"Failed to create payment payload: {e}",
         }
 
-    # --- Step 5: Resubmit with PAYMENT-SIGNATURE ---
-    print(f"\n[x402] Step 4: Resubmitting with signed PAYMENT-SIGNATURE...")
-
+    # --- Step 5: Broadcast EIP-3009 transferWithAuthorization to USDC on-chain ---
     # ExactEvmScheme.create_payment_payload returns a Pydantic PaymentPayloadV1
     # model. The SDK signed the EIP-3009 authorization internally via EIP-712
-    # (domain: name="USD Coin", version="2", chainId=84532,
-    # verifyingContract=0x036CbD53842c5426634e7929541eC2318f3dCF7e) and stored
-    # the real 0x-prefixed hex signature inside the inner payload dict.
+    # (domain: name=USDC contract's name(), version=USDC contract's version(),
+    # chainId=84532, verifyingContract=USDC address) and stored the real
+    # 0x-prefixed hex signature inside the inner payload dict.
     #
-    # Extraction path: payment_payload.payload  -> inner dict (ExactEIP3009Payload.to_dict())
-    #   -> ["signature"]  -> "0x" + 65-byte-ecdsa-hex  (the EIP-3009 authorization signature)
+    # Extraction path: payment_payload.payload  -> inner dict
+    #   -> ["authorization"]  -> {from, to, value, validAfter, validBefore, nonce}
+    #   -> ["signature"]      -> "0x" + 65-byte-ecdsa-hex  (EIP-3009 sig)
     #
-    # This is the value the vendor expects in the PAYMENT-SIGNATURE header, NOT a
-    # base64-of-serialized-model (which was the previous broken path).
+    # This signature is sent to the vendor in the PAYMENT-SIGNATURE header (Step 6).
+    # The on-chain transaction is built, signed, and broadcast directly by the client
+    # using web3.py so the TX HASH is a real 66-char hex string verifiable on
+    # Blockscout — not a vendor-generated mock string.
 
     def _extract_signature(pp) -> str:
         """Return the EIP-3009 authorization signature hex from a PaymentPayload model."""
@@ -379,10 +395,94 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
     print(f"[x402] Extracted EIP-3009 signature ({len(sig_value)} chars)")
     print(f"[x402] PAYMENT-SIGNATURE header: {sig_value[:60]}...")
 
+    # Extract the authorization dict from the inner payload (same object that
+    # encode_contract_call / parse_eip3009_authorization consume).
+    pp_dict = payment_payload.model_dump() if hasattr(payment_payload, "model_dump") else dict(payment_payload)
+    inner_payload = pp_dict.get("payload", {})
+    authorization = inner_payload.get("authorization", {}) if isinstance(inner_payload, dict) else {}
+
+    # web3 alias needed for address checksumming in the broadcast path below.
+    from web3 import Web3 as _Web3
+
     try:
+        # --- Build the raw transferWithAuthorization transaction ---
+        from x402.mechanisms.evm.exact import eip3009_utils
+
+        parsed_auth = eip3009_utils.parse_eip3009_authorization(
+            eip3009_utils.ExactEIP3009Authorization(
+                from_address=authorization.get("from", ""),
+                to=authorization.get("to", ""),
+                value=authorization.get("value", "0"),
+                valid_after=authorization.get("validAfter", "0"),
+                valid_before=authorization.get("validBefore", "0"),
+                nonce=authorization.get("nonce", "0x0"),
+            )
+        )
+        sig_bytes = bytes.fromhex(sig_value.removeprefix("0x"))
+        _v, _r, _s = eip3009_utils._split_signature_parts(sig_bytes)
+        tx_calldata = eip3009_utils.encode_contract_call(
+            eip3009_utils.TRANSFER_WITH_AUTHORIZATION_VRS_ABI,
+            "transferWithAuthorization",
+            _Web3.to_checksum_address(parsed_auth.from_address),
+            _Web3.to_checksum_address(parsed_auth.to),
+            parsed_auth.value,
+            parsed_auth.valid_after,
+            parsed_auth.valid_before,
+            parsed_auth.nonce,
+            _v, _r, _s,
+        )
+        _nonce = w3.eth.get_transaction_count(account.address)
+        _gas_price = w3.eth.gas_price
+        _gas_estimate = w3.eth.estimate_gas({
+            "to": _Web3.to_checksum_address("0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
+            "from": account.address,
+            "data": tx_calldata,
+            "value": 0,
+            "nonce": _nonce,
+        })
+        _gas_limit = int(_gas_estimate * 1.2)
+
+        _raw_tx = {
+            "to": _Web3.to_checksum_address("0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
+            "from": account.address,
+            "data": tx_calldata,
+            "value": 0,
+            "nonce": _nonce,
+            "gas": _gas_limit,
+            "maxFeePerGas": _gas_price,
+            "maxPriorityFeePerGas": _gas_price,
+            "chainId": w3.eth.chain_id,
+        }
+        _signed = w3.eth.account.sign_transaction(_raw_tx, PRIVATE_KEY)
+        print(f"[x402] Broadcasting EIP-3009 tx to USDC on Base Sepolia...")
+        print(f"[x402]   nonce={_nonce}, gas={_gas_limit}, gas_price={w3.from_wei(_gas_price, 'gwei')} gwei")
+        print(f"[x402]   pre-broadcast hash: {_signed.hash.hex()}")
+
+        _tx_hash = w3.eth.send_raw_transaction(_signed.raw_transaction)
+        print(f"[x402]   sent: {_tx_hash.hex()}")
+        print(f"[x402]   waiting for receipt...")
+
+        _receipt = w3.eth.wait_for_transaction_receipt(_tx_hash, timeout=60)
+        _real_hash = _receipt.transactionHash.hex()
+        _explorer = f"{VENDOR_EXPLORER_BASE}{_real_hash}"
+        _status = "SUCCESS" if _receipt.status == 1 else "FAILED"
+
+        print(f"[x402]   === ON-CHAIN CONFIRMED ===")
+        print(f"[x402]   REAL TX HASH: {_real_hash}")
+        print(f"[x402]   Block:        {_receipt.blockNumber}")
+        print(f"[x402]   Status:       {_status}")
+        print(f"[x402]   Gas used:     {_receipt.gasUsed}")
+        print(f"[x402]   Explorer:     {_explorer}")
+
+        # --- Step 6: Resubmit to vendor with real tx hash ---
+        print(f"\n[x402] Step 6: Resubmitting to vendor with real tx hash...")
         r2 = requests.post(
             f"{VENDOR_URL}/pay-x402",
-            json=payload,
+            json={
+                "vendor": vendor,
+                "amount_usd": amount_usd,
+                "tx_hash": _real_hash,
+            },
             headers={
                 "Content-Type": "application/json",
                 "PAYMENT-SIGNATURE": sig_value,
@@ -393,43 +493,62 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
 
         if r2.status_code == 200:
             result = r2.json() if r2.headers.get("Content-Type", "").startswith("application/json") else {"paid": True, "raw": r2.text[:500]}
-            tx_hash = result.get("tx_hash") or result.get("transaction_hash") or result.get("hash", "")
-            explorer = ""
-            if tx_hash:
-                explorer = f"{VENDOR_EXPLORER_BASE}{tx_hash}"
-                print(f"[x402] TX HASH: {tx_hash}")
-                print(f"[x402] EXPLORER: {explorer}")
-
+            # Use the REAL on-chain hash, not any vendor-generated mock
+            result["tx_hash"] = _real_hash
+            result["explorer"] = _explorer
             result["mode"] = "x402_onchain"
-            result["tx_hash"] = tx_hash
-            result["explorer"] = explorer
             result["amount"] = amount_usd
             result["vendor"] = vendor
             result["timestamp"] = datetime.now(timezone.utc).isoformat()
+            result["status"] = _status
+
             print(f"\n[x402] === PAYMENT SUCCESSFUL ===")
             print(f"[x402] Mode:    x402_onchain (real Base Sepolia tx)")
             print(f"[x402] Amount:  ${amount_usd:.2f} USD")
-            print(f"[x402] TX Hash: {tx_hash}")
-            print(f"[x402] Explorer: {explorer}")
+            print(f"[x402] TX Hash: {_real_hash}")
+            print(f"[x402] Explorer: {_explorer}")
 
-            # Dashboard persistence — record the on-chain tx
+            # Dashboard persistence — record the REAL on-chain tx
             _log_tx_to_dashboard({
                 "vendor": vendor,
                 "amount_usd": amount_usd,
-                "tx_hash": tx_hash,
+                "tx_hash": _real_hash,
                 "network": "Base Sepolia",
-                "explorer_url": explorer,
+                "explorer_url": _explorer,
                 "payment_mode": "x402_onchain",
+                "status": _status,
             })
 
             return result
         else:
             print(f"[x402] Resubmit failed: HTTP {r2.status_code}")
             print(f"[x402] Body: {r2.text[:300]}")
-            return _execute_fallback_payment(vendor, amount_usd)
+            # Transaction already on-chain; still record it
+            _log_tx_to_dashboard({
+                "vendor": vendor,
+                "amount_usd": amount_usd,
+                "tx_hash": _real_hash,
+                "network": "Base Sepolia",
+                "explorer_url": _explorer,
+                "payment_mode": "x402_onchain",
+                "status": "sent_only",
+            })
+            return {
+                "paid": True,
+                "amount": amount_usd,
+                "vendor": vendor,
+                "mode": "x402_onchain",
+                "tx_hash": _real_hash,
+                "explorer": _explorer,
+                "status": "sent_only",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
-    except requests.RequestException as e:
-        print(f"[x402] Resubmit request failed: {e}")
+    except Exception as e:
+        print(f"[x402] On-chain broadcast failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        print("[x402] Falling back to vendor-only payment (no on-chain tx)")
         return _execute_fallback_payment(vendor, amount_usd)
 
 
