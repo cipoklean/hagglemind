@@ -1,26 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 
 // ---------------------------------------------------------------------------
-// Config — points at the FastAPI backend.  Update API_URL when deploying.
+// Config — points at the FastAPI backend. Update VITE_API_URL when deploying.
 // ---------------------------------------------------------------------------
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const VENDOR_URL = import.meta.env.VITE_VENDOR_URL || "http://localhost:8777"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function confidenceColor(c) {
-  if (c == null || isNaN(c)) return "bg-surface-500"
-  if (c >= 0.7) return "bg-accent-green"
-  if (c >= 0.4) return "bg-accent-yellow"
-  return "bg-accent-red"
-}
-
-function confidenceLabel(c) {
-  if (c == null || isNaN(c)) return "—"
-  if (c >= 0.7) return "Strong"
-  if (c >= 0.4) return "Fair"
-  return "Weak"
+function isRealHash(hash) {
+  return typeof hash === "string" && hash.startsWith("0x") && hash.length === 66
 }
 
 function formatTimestamp(ts) {
@@ -32,15 +23,97 @@ function formatTimestamp(ts) {
   }
 }
 
-function isRealHash(hash) {
-  return typeof hash === "string" && hash.startsWith("0x") && hash.length === 66
+// mono numeral, zero-padded
+function numeral(n) {
+  return String(n).padStart(2, "0")
+}
+
+// mono label → UPPERCASE, letter-spacing
+function monoLabel(txt) {
+  return txt.toUpperCase()
+}
+
+// section heading: numeral + title
+function sectionHead(num, title) {
+  return (
+    <div className="section-head">
+      <span className="section-num">{numeral(num)} /</span>
+      <h2 className="section-title">{title}</h2>
+    </div>
+  )
+}
+
+// hairline rule
+function hairline() {
+  return <hr className="hairline-section" />
 }
 
 // ---------------------------------------------------------------------------
-// Section A — The Agent's Brain
+// Top bar
 // ---------------------------------------------------------------------------
 
-function MemorySection({ onRefresh }) {
+function TopBar() {
+  return (
+    <header className="topbar">
+      <div className="topbar-left">
+        <h1 className="topbar-brand">HaggleMind</h1>
+        <span className="topbar-tag">AUTONOMOUS BILL NEGOTIATOR</span>
+      </div>
+      <div className="topbar-right">
+        <span className="topbar-chip">
+          <span className="live-dot" aria-hidden="true" />
+          BASE SEPOLIA · LIVE
+        </span>
+      </div>
+      <hr className="hairline" />
+    </header>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Hero
+// ---------------------------------------------------------------------------
+
+function Hero() {
+  const chips = [
+    "LIVE ON BASE SEPOLIA",
+    "X402 SETTLED",
+    "SIBYL MEMORY SDK",
+    "DELETE MEMORY → PAYS MORE",
+    "CHAIN-VERIFIED UI",
+  ]
+
+  return (
+    <section className="hero">
+      <p className="hero-kicker">
+        BUILD LOG · SIBYL LABS MEMORY HACKATHON
+        <span className="kicker-rule" aria-hidden="true" />
+      </p>
+      <h2 className="hero-headline">
+        <span>Negotiation that</span>
+        <span className="hero-accent">remembers.</span>
+      </h2>
+      <p className="hero-lede">
+        HaggleMind keeps a load-bearing memory of every vendor: what worked,
+        what failed, what it cost. That memory changes the price it
+        pays. Settled onchain via x402.
+      </p>
+      <div className="hero-chips" role="list">
+        {chips.map((c) => (
+          <span key={c} className="chip" role="listitem">
+            {c}
+          </span>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Section 01 — MEMORY
+// ---------------------------------------------------------------------------
+
+function MemorySection() {
   const [vendors, setVendors] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -64,182 +137,196 @@ function MemorySection({ onRefresh }) {
     refresh()
   }, [refresh])
 
-  const vendorList = Object.entries(vendors).sort((a, b) => a[0].localeCompare(b[0]))
+  const vendorList = Object.entries(vendors)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .filter(([v]) => v.length > 0)
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2 className="panel-title">
-          <span className="title-icon">🧠</span> The Agent's Brain
-        </h2>
-        <button
-          className="btn btn-ghost"
-          onClick={refresh}
-          disabled={loading}
-          title="Fetch latest from Sibyl Memory"
-        >
-          {loading ? "…" : "Refresh"}
-        </button>
+    <section className="section section-memory">
+      {hairline()}
+      {sectionHead(1, "What it remembers.")}
+
+      <div className="memory-body">
+        {error && (
+          <p className="section-error">Error loading memory: {error}</p>
+        )}
+
+        {vendorList.length === 0 && !loading && (
+          <p className="section-empty">
+            No vendor memory yet — run the agent to populate Sibyl Memory.
+          </p>
+        )}
+
+        {vendorList.map(([vendor, tactics]) => (
+          <div key={vendor} className="vendor-plate">
+            <div className="vendor-name">{vendor}</div>
+            <div className="tactic-rows">
+              {Object.entries(tactics).map(([tactic, data]) => {
+                const conf = data?.confidence ?? 0
+                const s = data?.successes ?? 0
+                const f = data?.failures ?? 0
+                const pct = Math.min(100, Math.max(2, conf * 100))
+                return (
+                  <div key={tactic} className="tactic-row">
+                    <div className="tactic-left">
+                      <span className="tactic-name">{tactic}</span>
+                      <span className="tactic-sub">
+                        {numeral(s)}s / {numeral(f)}f
+                      </span>
+                    </div>
+                    <div className="tactic-bar-wrap" title={`${conf.toFixed(2)}`}>
+                      <span className="bar-track" />
+                      <span
+                        className="bar-fill"
+                        style={{ width: `${pct}%` }}
+                        aria-label={`${conf.toFixed(2)} confidence`}
+                      />
+                    </div>
+                    <span className="tactic-score">{conf.toFixed(2)}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
       </div>
 
-      {error && (
-        <div className="mb-3 px-3 py-2 bg-accent-red/10 border border-accent-red/30 rounded text-sm text-accent-red">
-          Error loading memory: {error}
-        </div>
-      )}
-
-      {vendorList.length === 0 && !loading && (
-        <div className="empty-state">
-          <div className="empty-icon">📭</div>
-          <p>No vendor memory yet</p>
-          <p className="text-xs text-surface-500 mt-1">
-            Run the agent to populate Sibyl Memory
-          </p>
-        </div>
-      )}
-
-      {vendorList.length > 0 && (
-        <div className="memory-grid">
-          {vendorList.map(([vendor, tactics]) => (
-            <div key={vendor} className="vendor-card">
-              <div className="vendor-name">{vendor}</div>
-              <div className="tactic-list">
-                {Object.entries(tactics).map(([tactic, data]) => {
-                  const conf = data?.confidence ?? 0
-                  return (
-                    <div key={tactic} className="tactic-row">
-                      <div className="tactic-info">
-                        <span className="tactic-name">{tactic}</span>
-                        <span className="tactic-stats">
-                          {data?.successes ?? 0}s / {data?.failures ?? 0}f
-                        </span>
-                      </div>
-                      <div className="conf-cell">
-                        <div className="conf-bar-wrap" title={`${conf.toFixed(2)} — ${confidenceLabel(conf)}`}>
-                          <div className="conf-bar">
-                            <div className={`conf-fill ${confidenceColor(conf)}`}
-                              style={{ width: `${Math.min(100, Math.max(4, conf * 100))}%` }} />
-                          </div>
-                        </div>
-                        <span className="conf-value">{conf.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <style>{`
-        .memory-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-          gap: 10px;
-        }
-        .vendor-card {
-          background: rgba(30, 41, 59, 0.6);
-          border: 1px solid rgba(51, 65, 85, 0.6);
-          border-radius: 8px;
-          padding: 10px;
-        }
-        .vendor-name {
-          font-weight: 600;
-          font-size: 13px;
-          color: #94a3b8;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin-bottom: 6px;
-        }
-        .tactic-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 6px;
-          padding: 3px 0;
-        }
-        .tactic-info {
-          display: flex;
-          flex-direction: column;
-          min-width: 0;
-          flex: 1;
-        }
-        .tactic-name {
-          font-size: 12px;
-          color: #e2e8f0;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .tactic-stats {
-          font-size: 10px;
-          color: #64748b;
-        }
-        .conf-cell {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          flex-shrink: 0;
-        }
-        .conf-bar-wrap {
-          width: 44px;
-          height: 5px;
-          background: #1e293b;
-          border-radius: 3px;
-          overflow: hidden;
-        }
-        .conf-bar {
-          height: 100%;
-          border-radius: 3px;
-          transition: width 0.3s;
-        }
-        .conf-fill { width: 4%; }
-        .conf-value {
-          font-size: 11px;
-          font-weight: 600;
-          color: #cbd5e1;
-          min-width: 32px;
-          text-align: right;
-          font-variant-numeric: tabular-nums;
-        }
-      `}</style>
+      <div className="section-refresh">
+        <button className="refresh-link" onClick={refresh} disabled={loading}>
+          refresh ↻ {loading ? "…" : ""}
+        </button>
+      </div>
     </section>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Section B — Live Agent Console
+// Inject control row — vendor select + amount + inject button
+// ---------------------------------------------------------------------------
+
+const VENDORS = ["Comcast", "Netflix", "Spotify", "DisneyPlus"]
+
+function InjectControl({ onInject }) {
+  const [vendor, setVendor] = useState(VENDORS[0])
+  const [amount, setAmount] = useState("1.00")
+  const [injecting, setInjecting] = useState(false)
+  const [result, setResult] = useState(null)
+
+  const handleInject = useCallback(async () => {
+    setInjecting(true)
+    setResult(null)
+    try {
+      const res = await fetch(`${API_URL}/api/inject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendor, amount: parseFloat(amount) || 1.0 }),
+      })
+      const data = await res.json().catch(() => ({}))
+      setResult(data)
+      if (data?.injected) {
+        onInject?.(vendor, parseFloat(amount) || 1.0)
+      }
+    } catch (err) {
+      setResult({ injected: false, message: err.message })
+    } finally {
+      setInjecting(false)
+    }
+  }, [vendor, amount, onInject])
+
+  return (
+    <div className="inject-row">
+      <label className="inject-label">
+        <span className="inject-label-text">Vendor</span>
+        <select
+          className="inject-select"
+          value={vendor}
+          onChange={(e) => setVendor(e.target.value)}
+        >
+          {VENDORS.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="inject-label">
+        <span className="inject-label-text">Amount</span>
+        <input
+          className="inject-amount"
+          type="number"
+          step="0.01"
+          min="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="1.00"
+        />
+      </label>
+
+      <button
+        className={`inject-btn ${injecting ? "inject-btn-busy" : ""}`}
+        onClick={handleInject}
+        disabled={injecting}
+      >
+        {injecting ? "injecting…" : "inject invoice"}
+      </button>
+
+      {result && (
+        <span className={`inject-result ${result.injected ? "inject-result-ok" : "inject-result-err"}`}>
+          {result.injected ? `injected · ${result.vendor} · $${result.amount.toFixed(2)}` : result.message || "inject failed"}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Section 02 — ACTION (console)
 // ---------------------------------------------------------------------------
 
 function ConsoleSection({ onRunComplete }) {
   const [steps, setSteps] = useState([])
   const [loading, setLoading] = useState(false)
   const [runError, setRunError] = useState(null)
+  const [vendor, setVendor] = useState(VENDORS[0])
+  const [amount, setAmount] = useState("1.00")
   const pollRef = useRef(null)
   const endRef = useRef(null)
+  const scrollContainerRef = useRef(null)
+  const userScrolledUpRef = useRef(false)
 
   const fetchLogs = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/api/logs?limit=200`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      // action_steps are the terminal-style steps; fall back to agent_logs if missing
-      const raw = data.action_steps || data.agent_logs || []
-      // Normalise to a consistent shape for the console
-      const normalised = raw.map((s) => ({
-        id: s.id ?? s.step_num ?? Math.random().toString(36).slice(2),
-        ts: s.timestamp ?? s.ts ?? "",
-        vendor: s.vendor ?? "",
-        type: s.step_type ?? s.type ?? "info",
-        message: s.message ?? s.note ?? JSON.stringify(s),
-      }))
+      // action_steps hold the full terminal-style messages (message column).
+      // Fall back to agent_logs only if action_steps is genuinely empty.
+      const raw = data.action_steps && data.action_steps.length > 0
+        ? data.action_steps
+        : data.agent_logs || []
+      // Normalise to a consistent shape for the console.
+      // action_steps: { id, timestamp, vendor, step_num, step_type, message }
+      // agent_logs:   { id, timestamp, vendor, tactic, note, ... }
+      const normalised = raw.map((s) => {
+        // Prefer the real message column; never fall back to JSON.stringify
+        // (that dumps the whole row object as the message text).
+        const msg =
+          (s.message && typeof s.message === "string") ? s.message :
+          (s.note && typeof s.note === "string") ? s.note :
+          (s.step_type === "run") ? `HaggleMind starting negotiation for ${s.vendor || "…"}` :
+          ""
+        return {
+          id: s.id ?? s.step_num ?? Math.random().toString(36).slice(2),
+          ts: s.timestamp ?? s.ts ?? "",
+          vendor: s.vendor ?? "",
+          type: s.step_type ?? s.type ?? "info",
+          message: msg,
+        }
+      })
       // newest first → reverse so console reads top-to-bottom chronologically
       const ordered = [...normalised].reverse()
       setSteps((prev) => {
-        // keep a stable running log — append new items without duplication
         const seen = new Set(prev.map((p) => p.id))
-        const fresh = ordered.filter((s) => !seen.has(s.id))
+        const fresh = ordered.filter((s) => !seen.has(s.id) && s.message !== "")
         return [...fresh, ...prev]
       })
     } catch {
@@ -247,25 +334,47 @@ function ConsoleSection({ onRunComplete }) {
     }
   }, [])
 
-  // Initial load
   useEffect(() => {
     fetchLogs()
     const timer = setInterval(fetchLogs, 1500)
     return () => clearInterval(timer)
   }, [fetchLogs])
 
+  // Inject-invoice hook: called when the user clicks "inject invoice" in the
+  // control row.  The Run button also calls this internally before running.
+  const injectInvoice = useCallback(async (v, amt) => {
+    try {
+      const res = await fetch(`${API_URL}/api/inject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendor: v, amount: amt }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!data?.injected) {
+        setRunError(`Inject failed: ${data?.message || "vendor unreachable"}`)
+      }
+    } catch (err) {
+      setRunError(`Inject failed: ${err.message}`)
+    }
+  }, [])
+
   const runAgent = useCallback(async () => {
     setLoading(true)
     setRunError(null)
-    // clear prior steps for a clean console
     setSteps([])
     try {
+      // 1. Inject invoice for the selected vendor (if a vendor is selected)
+      if (vendor) {
+        await injectInvoice(vendor, parseFloat(amount) || 1.0)
+      }
+
+      // 2. Run the negotiation agent
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 90000) // 90s for full run
+      const timeout = setTimeout(() => controller.abort(), 90000)
       const res = await fetch(`${API_URL}/api/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vendor: null }),
+        body: JSON.stringify({ vendor: vendor || null }),
         signal: controller.signal,
       })
       clearTimeout(timeout)
@@ -273,18 +382,12 @@ function ConsoleSection({ onRunComplete }) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.detail || `HTTP ${res.status}`)
       }
-      // The server blocks until the run finishes, so at this point the console
-      // should already be populated by the background /api/logs poll.
-      // Wait a moment for the last steps to flush, then mark complete.
       await new Promise((r) => setTimeout(r, 1500))
       setLoading(false)
       onRunComplete?.()
     } catch (err) {
       if (err.name === "AbortError") {
-        // Fetch timed out — the server may still be running.  Keep polling.
         setRunError("Run timed out — checking logs for progress…")
-        // Let the existing /api/logs poll continue; after ~10s with no new
-        // steps we give up and clear loading.
         setTimeout(() => {
           setLoading(false)
           onRunComplete?.()
@@ -294,131 +397,137 @@ function ConsoleSection({ onRunComplete }) {
       setRunError(err.message)
       setLoading(false)
     }
-  }, [fetchLogs, onRunComplete])
+  }, [vendor, amount, fetchLogs, onRunComplete, injectInvoice])
 
-  // auto-scroll
+  // auto-scroll — only when user is at the bottom; stop when they scroll up
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" })
+    const el = scrollContainerRef.current
+    if (!el || !endRef.current) return
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (gap < 40 && !userScrolledUpRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+    if (gap < 40) {
+      userScrolledUpRef.current = false
+    }
   }, [steps])
 
-  const typeIcon = (type) => {
+  const onScroll = () => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (gap >= 40) {
+      userScrolledUpRef.current = true
+    }
+  }
+
+  // type → mono label (no emoji)
+  const typeLabel = (type) => {
     switch (type) {
-      case "run": return "🚀"
+      case "run": return "RUN"
       case "info": return "·"
-      case "memory": return "📚"
-      case "decision": return "🎯"
-      case "action": return "⚡"
-      case "vendor": return "💬"
-      case "result": return "✅"
-      case "payment": return "💸"
-      case "error": return "❌"
-      case "warning": return "⚠️"
+      case "memory": return "MEM"
+      case "decision": return "DEC"
+      case "action": return "ACT"
+      case "vendor": return "VND"
+      case "result": return "OK"
+      case "payment": return "PAY"
+      case "error": return "ERR"
+      case "warning": return "WARN"
       default: return "·"
     }
   }
 
-  const typeColor = (type) => {
+  const typeColorClass = (type) => {
     switch (type) {
-      case "run": return "text-accent-purple"
-      case "error": return "text-accent-red"
-      case "warning": return "text-accent-yellow"
-      case "payment": return "text-accent-green"
-      case "result": return "text-accent-green"
-      case "decision": return "text-accent-blue"
-      case "memory": return "text-surface-400"
-      default: return "text-surface-400"
+      case "run": return "ts-run"
+      case "error": return "ts-err"
+      case "warning": return "ts-warn"
+      case "payment": return "ts-pay"
+      case "result": return "ts-ok"
+      case "decision": return "ts-dec"
+      case "memory": return "ts-mem"
+      case "vendor": return "ts-vnd"
+      case "action": return "ts-act"
+      default: return "ts-info"
     }
   }
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2 className="panel-title">
-          <span className="title-icon">⚡</span> Live Agent Console
-        </h2>
-        <button
-          className={`btn btn-primary ${loading ? "btn-disabled" : ""}`}
-          onClick={runAgent}
-          disabled={loading}
-        >
-          {loading ? "Running…" : "▶ Run Negotiation Agent"}
-        </button>
+    <section className="section section-action">
+      {hairline()}
+      {sectionHead(2, "Watch it think.")}
+
+      <div className="action-body">
+        {runError && (
+          <p className="section-error">{runError}</p>
+        )}
+
+        {/* Inject control row */}
+        <InjectControl onInject={injectInvoice} />
+
+        <div className="terminal" ref={scrollContainerRef} onScroll={onScroll}>
+          {steps.length === 0 && !loading && (
+            <div className="terminal-empty">Console idle — press Run to start</div>
+          )}
+          {steps.map((step) => (
+            <div key={step.id} className={`terminal-line ${typeColorClass(step.type)}`}>
+              <span className="terminal-ts">{formatTimestamp(step.ts)}</span>
+              <span className="terminal-tag">{typeLabel(step.type)}</span>
+              <span className="terminal-body">
+                <span className="terminal-vendor">[{step.vendor}]</span>
+                <span className="terminal-msg">{step.message || "·"}</span>
+              </span>
+            </div>
+          ))}
+          <div ref={endRef} />
+        </div>
+
+        <div className="terminal-caption">
+          fig. 02 — live transcript, polled from /api/logs
+        </div>
+
+        <div className="action-control">
+          <button
+            className={`run-pill ${loading ? "run-pill-disabled" : "run-pill-active"}`}
+            onClick={runAgent}
+            disabled={loading}
+          >
+            {loading ? "Run in progress…" : "Run negotiation agent"}
+          </button>
+          {loading && (
+            <span className="run-status">polling /api/logs · 90s timeout</span>
+          )}
+          {!loading && runError && (
+            <span className="run-status run-status-err">{runError}</span>
+          )}
+        </div>
       </div>
-
-      {runError && (
-        <div className="mb-3 px-3 py-2 bg-accent-red/10 border border-accent-red/30 rounded text-sm text-accent-red">
-          Run error: {runError}
-        </div>
-      )}
-
-      {steps.length === 0 && !loading && (
-        <div className="empty-state">
-          <div className="empty-icon">⏳</div>
-          <p>Console idle — press Run to start</p>
-        </div>
-      )}
-
-      <div className="console-output">
-        {steps.map((step) => (
-          <div key={step.id} className={`console-line ${typeColor(step.type)}`}>
-            <span className="console-ts">{formatTimestamp(step.ts).slice(11, 19)}</span>
-            <span className="console-icon">{typeIcon(step.type)}</span>
-            <span className="console-msg">{step.message || "·"}</span>
-          </div>
-        ))}
-        <div ref={endRef} />
-      </div>
-
-      {loading && (
-        <div className="mt-2 text-xs text-surface-500 flex items-center gap-2">
-          <span className="blink">●</span> Polling for completion…
-        </div>
-      )}
-
-      <style>{`
-        .console-output {
-          background: #020617;
-          border: 1px solid #1e293b;
-          border-radius: 8px;
-          padding: 12px 14px;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-          font-size: 12px;
-          line-height: 1.7;
-          min-height: 180px;
-          max-height: 320px;
-          overflow-y: auto;
-        }
-        .console-line {
-          display: flex;
-          gap: 8px;
-          align-items: baseline;
-          white-space: pre-wrap;
-          word-break: break-word;
-        }
-        .console-ts {
-          color: #475569;
-          flex-shrink: 0;
-          min-width: 70px;
-        }
-        .console-icon {
-          flex-shrink: 0;
-        }
-        .console-msg {
-          color: #cbd5e1;
-        }
-        .blink {
-          animation: blink 1s step-end infinite;
-        }
-        @keyframes blink {
-          50% { opacity: 0; }
-        }
-      `}</style>
     </section>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Section C — On-Chain Proof
+// Mode chip — X402 ONCHAIN (teal outline) / DIRECT API (muted outline)
+// ---------------------------------------------------------------------------
+
+function ModeChip({ mode }) {
+  const normalised = (mode || "unknown").toUpperCase().replace(/_/g, " ")
+  const isOnchain = normalised === "X402 ONCHAIN"
+  const isDirect = normalised === "DIRECT API"
+
+  return (
+    <span
+      className={`mode-chip ${isOnchain ? "mode-chip-onchain" : isDirect ? "mode-chip-direct" : "mode-chip-unknown"}`}
+      title={isDirect ? "settled off-chain (dev fallback)" : isOnchain ? "settled on-chain via x402" : normalised}
+    >
+      {normalised}
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Section 03 — SETTLEMENT (on-chain proof)
 // ---------------------------------------------------------------------------
 
 function ChainProofSection() {
@@ -427,6 +536,7 @@ function ChainProofSection() {
   const [verifying, setVerifying] = useState({})
   const [proofs, setProofs] = useState({})
   const [error, setError] = useState(null)
+  const [showAll, setShowAll] = useState(false)
 
   const fetchTxs = useCallback(async () => {
     setLoading(true)
@@ -451,7 +561,9 @@ function ChainProofSection() {
     if (verifying[tx.id]) return
     setVerifying((prev) => ({ ...prev, [tx.id]: true }))
     try {
-      const res = await fetch(`${API_URL}/api/chain-proof/${encodeURIComponent(tx.tx_hash)}`)
+      const res = await fetch(
+        `${API_URL}/api/chain-proof/${encodeURIComponent(tx.tx_hash)}`,
+      )
       const data = await res.json()
       setProofs((prev) => ({ ...prev, [tx.id]: data }))
     } catch {
@@ -466,77 +578,75 @@ function ChainProofSection() {
 
   const realTxs = txs.filter((t) => isRealHash(t.tx_hash))
   const mockTxs = txs.filter((t) => !isRealHash(t.tx_hash))
+  const displayTxs = showAll ? txs : realTxs
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2 className="panel-title">
-          <span className="title-icon">⛓️</span> On-Chain Proof
-        </h2>
-        <button className="btn btn-ghost" onClick={fetchTxs} disabled={loading}>
-          {loading ? "…" : "Refresh"}
-        </button>
+    <section className="section section-settlement">
+      {hairline()}
+      {sectionHead(3, "Proof, not promises.")}
+
+      <div className="settlement-body">
+        {error && (
+          <p className="section-error">{error}</p>
+        )}
+
+        {txs.length === 0 && !loading && (
+          <p className="section-empty">
+            No transactions yet — run the agent to generate on-chain payments.
+          </p>
+        )}
+
+        {/* toggle: show full history (mock + direct-api rows) */}
+        {mockTxs.length > 0 && !loading && (
+          <button
+            className="history-toggle"
+            onClick={() => setShowAll((v) => !v)}
+          >
+            {showAll
+              ? `hide mock rows`
+              : `show full history · ${mockTxs.length} mock`}
+          </button>
+        )}
+
+        {/* real-hash rows (always shown unless hidden by toggle) */}
+        {realTxs.length > 0 && (
+          <div className="tx-table">
+            {realTxs.map((tx) => (
+              <TransactionRow
+                key={tx.id}
+                tx={tx}
+                proof={proofs[tx.id]}
+                verifying={verifying[tx.id]}
+                onVerify={verify}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* mock / direct-api rows — only when toggle is open */}
+        {showAll && mockTxs.length > 0 && (
+          <div className="tx-table tx-table-mock">
+            {mockTxs.map((tx) => (
+              <TransactionRow
+                key={tx.id}
+                tx={tx}
+                proof={proofs[tx.id]}
+                verifying={verifying[tx.id]}
+                onVerify={verify}
+              />
+            ))}
+          </div>
+        )}
+
+        {realTxs.length === 0 &&
+          mockTxs.length > 0 &&
+          !loading && !showAll && (
+            <p className="section-warn">
+              All recorded transactions are vendor mock markers. Only real
+              66-char hex hashes can be verified on-chain.
+            </p>
+          )}
       </div>
-
-      {error && (
-        <div className="mb-3 px-3 py-2 bg-accent-red/10 border border-accent-red/30 rounded text-sm text-accent-red">
-          {error}
-        </div>
-      )}
-
-      {txs.length === 0 && !loading && (
-        <div className="empty-state">
-          <div className="empty-icon">🔗</div>
-          <p>No transactions yet</p>
-          <p className="text-xs text-surface-500 mt-1">Run the agent to generate on-chain payments</p>
-        </div>
-      )}
-
-      {/* Real txs first */}
-      {realTxs.length > 0 && (
-        <div className="proof-list">
-          <div className="proof-section-label">REAL ON-CHAIN TRANSACTIONS</div>
-          {realTxs.map((tx) => (
-            <TransactionRow key={tx.id} tx={tx} proof={proofs[tx.id]} verifying={verifying[tx.id]} onVerify={verify} />
-          ))}
-        </div>
-      )}
-
-      {/* Mock txs last, visually deprioritised */}
-      {mockTxs.length > 0 && (
-        <div className="proof-list">
-          <div className="proof-section-label mock">MOCK VENDOR MARKERS (NOT ON-CHAIN)</div>
-          {mockTxs.map((tx) => (
-            <TransactionRow key={tx.id} tx={tx} proof={proofs[tx.id]} verifying={verifying[tx.id]} onVerify={verify} />
-          ))}
-        </div>
-      )}
-
-      {realTxs.length === 0 && mockTxs.length > 0 && !loading && (
-        <div className="mt-2 px-3 py-2 bg-accent-yellow/10 border border-accent-yellow/30 rounded text-xs text-accent-yellow">
-          ⚠️ All recorded transactions are vendor mock markers. Only real 66-char hex hashes can be verified on-chain.
-        </div>
-      )}
-
-      <style>{`
-        .proof-list {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-        .proof-section-label {
-          font-size: 10px;
-          font-weight: 600;
-          letter-spacing: 0.08em;
-          color: #64748b;
-          margin-bottom: 4px;
-          padding-left: 2px;
-        }
-        .proof-section-label.mock {
-          color: #64748b;
-          font-style: italic;
-        }
-      `}</style>
     </section>
   )
 }
@@ -546,223 +656,161 @@ function TransactionRow({ tx, proof, verifying, onVerify }) {
   const verified = proof?.verified
   const raw = proof?.raw
 
+  const mode = tx.payment_mode ?? "unknown"
+  const amount = tx.amount_usd != null
+    ? `$${Number(tx.amount_usd).toFixed(2)}`
+    : "—"
+
+  // middle-truncated hash: keep first 10 + last 6, drop the middle
+  const hashShort = tx.tx_hash.slice(0, 10) + "···" + tx.tx_hash.slice(-6)
+
   return (
-    <div className={`tx-row ${real ? "tx-real" : "tx-mock"}`}>
-      <div className="tx-main">
-        <div className="tx-hash">
-          <span className="tx-hash-label">Tx</span>
-          <code className="tx-hash-value">{tx.tx_hash.slice(0, 10)}…{tx.tx_hash.slice(-6)}</code>
-          {real && (
-            <a href={`https://sepolia.basescan.org/tx/${tx.tx_hash}`} target="_blank" rel="noopener noreferrer"
-              className="tx-basescan-link" title="View on BaseScan">
-              ↗
-            </a>
-          )}
-        </div>
-        <div className="tx-meta">
-          <span className="tx-vendor">{tx.vendor}</span>
-          <span className="tx-sep">·</span>
-          <span className="tx-amount">${Number(tx.amount_usd).toFixed(2)}</span>
-          <span className="tx-sep">·</span>
-          <span className="tx-mode">{tx.payment_mode?.replace("_", " ") ?? "unknown"}</span>
-        </div>
+    <div className={`tx-row ${real ? "tx-row-real" : "tx-row-mock"}`}>
+      {/* col 1: tx hash + basescan */}
+      <div className="tx-cell tx-cell-hash">
+        <span className="tx-hash-label">Tx</span>
+        <code className="tx-hash-code">{hashShort}</code>
+        {real && (
+          <a
+            href={`https://sepolia.basescan.org/tx/${tx.tx_hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="basescan-link"
+            title="View on BaseScan"
+          >
+            basescan ↗
+          </a>
+        )}
+        {!real && (
+          <span className="tx-hash-mock-tag">mock</span>
+        )}
       </div>
 
-      <div className="tx-actions">
-        {real && (
+      {/* col 2: vendor */}
+      <div className="tx-cell tx-cell-vendor">
+        <span className="tx-vendor-name">{tx.vendor || "—"}</span>
+      </div>
+
+      {/* col 3: amount */}
+      <div className="tx-cell tx-cell-amount">
+        <span className="tx-amount">{amount}</span>
+      </div>
+
+      {/* col 4: mode chip */}
+      <div className="tx-cell tx-cell-mode">
+        <ModeChip mode={mode} />
+      </div>
+
+      {/* col 5: verify button */}
+      <div className="tx-cell tx-cell-verify">
+        {real ? (
           <button
-            className={`btn-verify ${verifying ? "btn-verifying" : ""}`}
+            className={`verify-btn ${verifying ? "verify-btn-busy" : ""}`}
             onClick={() => onVerify(tx)}
             disabled={!!verifying}
           >
-            {verifying ? "Verifying…" : "Verify on Chain"}
+            {verifying ? "verifying…" : "verify on chain"}
           </button>
-        )}
-        {!real && (
-          <button className="btn-verify btn-mock" disabled title="Mock hash — cannot verify on-chain">
-            Verify on Chain
-          </button>
-        )}
-        {real && (
-          <a href={`https://sepolia.basescan.org/tx/${tx.tx_hash}`} target="_blank" rel="noopener noreferrer"
-            className="btn btn-ghost btn-sm">
-            BaseScan ↗
-          </a>
+        ) : (
+          <span className="verify-btn verify-btn-mock" title="Mock hash — cannot verify on-chain">
+            verify on chain
+          </span>
         )}
       </div>
 
-      {verified !== undefined && (
-        <div className={`tx-proof ${verified ? "proof-ok" : "proof-fail"}`}>
-          {verified ? (
-            <>
-              <div className="proof-badge">⛓️ Chain Verified</div>
-              {raw && (
-                <div className="proof-detail">
-                  <div className="proof-row">
-                    <span className="proof-k">Block</span>
-                    <span className="proof-v">{raw.blockNumber?.toLocaleString()}</span>
-                  </div>
-                  <div className="proof-row">
-                    <span className="proof-k">Gas</span>
-                    <span className="proof-v">{raw.gasUsed?.toLocaleString()}</span>
-                  </div>
-                  <div className="proof-row">
-                    <span className="proof-k">Timestamp</span>
-                    <span className="proof-v">{raw.timestamp ? formatTimestamp(raw.timestamp) : "—"}</span>
-                  </div>
-                  {raw.logs && raw.logs.length > 0 && (
-                    <div className="proof-row proof-transfer">
-                      <span className="proof-k">USDC Transfer</span>
-                      <span className="proof-v">
-                        {raw.logs[0].from.slice(0, 6)}…{raw.logs[0].from.slice(-4)} →
-                        {raw.logs[0].to.slice(0, 6)}…{raw.logs[0].to.slice(-4)}
-                        {" "}{raw.logs[0].value_usd.toFixed(2)} USDC
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="proof-badge proof-fail-badge">❌ Not Verified</div>
-          )}
+      {/* col 6: basescan link (real hashes only) */}
+      {real && (
+        <div className="tx-cell tx-cell-basescan">
+          <a
+            href={`https://sepolia.basescan.org/tx/${tx.tx_hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="basescan-link"
+          >
+            basescan ↗
+          </a>
         </div>
       )}
 
-      <style>{`
-        .tx-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 8px 10px;
-          background: rgba(15, 23, 42, 0.5);
-          border: 1px solid rgba(51, 65, 85, 0.4);
-          border-radius: 6px;
-          flex-wrap: wrap;
-        }
-        .tx-real {
-          border-left: 2px solid #22c55e;
-        }
-        .tx-mock {
-          opacity: 0.6;
-          border-left: 2px solid #475569;
-        }
-        .tx-main {
-          flex: 1;
-          min-width: 0;
-        }
-        .tx-hash {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .tx-hash-label {
-          font-size: 10px;
-          color: #64748b;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-        .tx-hash-value {
-          font-family: ui-monospace, monospace;
-          font-size: 12px;
-          color: #e2e8f0;
-          background: rgba(30, 41, 59, 0.6);
-          padding: 1px 5px;
-          border-radius: 4px;
-        }
-        .tx-basescan-link {
-          color: #64748b;
-          text-decoration: none;
-          font-size: 13px;
-        }
-        .tx-basescan-link:hover { color: #94a3b8; }
-        .tx-meta {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          margin-top: 3px;
-          font-size: 11px;
-          color: #94a3b8;
-        }
-        .tx-sep { color: #475569; }
-        .tx-vendor { font-weight: 600; color: #e2e8f0; }
-        .tx-amount { color: #22c55e; font-weight: 600; }
-        .tx-mode {
-          text-transform: capitalize;
-          color: #64748b;
-        }
-        .tx-actions {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-shrink: 0;
-        }
-        .btn-verify {
-          background: #1e293b;
-          color: #e2e8f0;
-          border: 1px solid #334155;
-          border-radius: 5px;
-          padding: 4px 10px;
-          font-size: 11px;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .btn-verify:hover:not(:disabled) {
-          background: #334155;
-          border-color: #475569;
-        }
-        .btn-verify.btn-verifying {
-          opacity: 0.6;
-          cursor: wait;
-        }
-        .btn-verify.btn-mock {
-          opacity: 0.35;
-          cursor: not-allowed;
-          border-color: #334155;
-        }
-        .tx-proof {
-          flex: 1;
-          min-width: 140px;
-        }
-        .proof-badge {
-          font-size: 11px;
-          font-weight: 600;
-          color: #22c55e;
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          margin-bottom: 4px;
-        }
-        .proof-fail-badge {
-          color: #ef4444;
-        }
-        .proof-detail {
-          background: rgba(30, 41, 59, 0.4);
-          border-radius: 4px;
-          padding: 4px 8px;
-          font-size: 11px;
-        }
-        .proof-row {
-          display: flex;
-          gap: 8px;
-          padding: 1px 0;
-        }
-        .proof-transfer {
-          color: #22c55e;
-        }
-        .proof-k {
-          color: #64748b;
-          flex-shrink: 0;
-          min-width: 60px;
-        }
-        .proof-v {
-          color: #cbd5e1;
-          font-family: ui-monospace, monospace;
-          font-size: 10px;
-        }
-      `}</style>
+      {/* col 7: proof stamp */}
+      {validProof(proof) && (
+        <div className="tx-cell tx-cell-stamp">
+          <div className={`proof-stamp ${verified ? "stamp-verified" : "stamp-rejected"}`}>
+            {verified ? (
+              <>
+                <span>VERIFIED</span>
+                {raw && (
+                  <span className="stamp-detail">
+                    · BLOCK {raw.blockNumber?.toLocaleString()}
+                    · GAS {raw.gasUsed?.toLocaleString()}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>REJECTED · NOT ON CHAIN</>
+            )}
+          </div>
+        </div>
+      )}
     </div>
+  )
+}
+
+function validProof(p) {
+  return p != null && typeof p === "object"
+}
+
+// ---------------------------------------------------------------------------
+// Footer — with vendor-server health dot
+// ---------------------------------------------------------------------------
+
+function Footer() {
+  const [health, setHealth] = useState({ alive: false, status: "checking…" })
+  const [hLoading, setHLoading] = useState(true)
+
+  useEffect(() => {
+    const f = async () => {
+      setHLoading(true)
+      try {
+        const res = await fetch(`${API_URL}/api/vendor-health`)
+        const data = await res.json().catch(() => ({}))
+        setHealth(data)
+      } catch {
+        setHealth({ alive: false, status: "unreachable" })
+      } finally {
+        setHLoading(false)
+      }
+    }
+    f()
+    const timer = setInterval(f, 10000)
+    return () => clearInterval(timer)
+  }, [])
+
+  return (
+    <footer className="footer">
+      <hr className="hairline" />
+      <div className="footer-inner">
+        <span className="footer-left">
+          Sibyl Memory · Base · x402 — built for the Sibyl Labs Memory Hackathon
+        </span>
+
+        <span className="footer-health" title={health.status || "vendor server health"}>
+          <span className={`vendor-health-dot ${health.alive ? "vendor-health-alive" : ""}`} aria-hidden="true" />
+          <span className="vendor-health-label">
+            {hLoading ? "terminal 1 · …" : health.alive ? "terminal 1 · alive" : "terminal 1 · down"}
+          </span>
+        </span>
+
+        <a
+          href="https://github.com/cipoklean/veriflow"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="footer-right"
+        >
+          repo ↗
+        </a>
+      </div>
+    </footer>
   )
 }
 
@@ -774,171 +822,15 @@ export default function App() {
   const [runComplete, setRunComplete] = useState(false)
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="header-left">
-          <span className="header-logo">⚖️</span>
-          <span className="header-title">HaggleMind</span>
-          <span className="header-sub">Autonomous Bill Negotiator</span>
-        </div>
-        <div className="header-right">
-          <span className="header-badge">Web3 · Base Sepolia</span>
-          <span className="header-dot" id="live-dot" />
-        </div>
-      </header>
-
-      <main className="app-main">
-        <div className="dash-grid">
-          <div className="dash-col dash-col-wide">
-            <MemorySection />
-          </div>
-          <div className="dash-col dash-col-narrow">
-            <ConsoleSection onRunComplete={() => setRunComplete(true)} />
-          </div>
-        </div>
-
-        <div className="dash-grid dash-grid-full">
-          <ChainProofSection />
-        </div>
+    <div className="page">
+      <TopBar />
+      <main className="main">
+        <Hero />
+        <MemorySection />
+        <ConsoleSection onRunComplete={() => setRunComplete(true)} />
+        <ChainProofSection />
       </main>
-
-      <footer className="app-footer">
-        <span>Provable autonomous negotiation · All payments verifiable on Base Sepolia</span>
-      </footer>
-
-      <style>{`
-        .app-shell {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 24px 20px 40px;
-        }
-        .app-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding-bottom: 16px;
-          border-bottom: 1px solid #1e293b;
-          margin-bottom: 20px;
-        }
-        .header-left {
-          display: flex;
-          align-items: baseline;
-          gap: 10px;
-        }
-        .header-logo { font-size: 22px; }
-        .header-title {
-          font-size: 18px;
-          font-weight: 700;
-          color: #f1f5f9;
-        }
-        .header-sub {
-          font-size: 12px;
-          color: #64748b;
-        }
-        .header-right {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-        .header-badge {
-          font-size: 11px;
-          background: rgba(59, 130, 246, 0.15);
-          color: #60a5fa;
-          padding: 3px 10px;
-          border-radius: 20px;
-          border: 1px solid rgba(59, 130, 246, 0.3);
-        }
-        .header-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: #22c55e;
-          box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
-        }
-        .app-main {
-          display: flex;
-          flex-direction: column;
-          gap: 18px;
-        }
-        .dash-grid {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 18px;
-        }
-        .dash-grid.dash-grid-full {
-          margin-top: 6px;
-        }
-        .panel {
-          background: rgba(15, 23, 42, 0.4);
-          border: 1px solid #1e293b;
-          border-radius: 10px;
-          padding: 14px 16px;
-        }
-        .panel-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: 12px;
-        }
-        .panel-title {
-          font-size: 14px;
-          font-weight: 600;
-          color: #e2e8f0;
-          display: flex;
-          align-items: center;
-          gap: 7px;
-        }
-        .title-icon { font-size: 15px; }
-        .empty-state {
-          text-align: center;
-          padding: 18px 10px;
-          color: #64748b;
-          font-size: 13px;
-        }
-        .empty-icon { font-size: 24px; margin-bottom: 4px; }
-        .btn {
-          border: none;
-          border-radius: 6px;
-          padding: 6px 14px;
-          font-size: 12px;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.15s;
-          font-family: inherit;
-        }
-        .btn-primary {
-          background: #3b82f6;
-          color: white;
-        }
-        .btn-primary:hover:not(:disabled) {
-          background: #2563eb;
-        }
-        .btn-ghost {
-          background: transparent;
-          color: #94a3b8;
-          border: 1px solid #334155;
-        }
-        .btn-ghost:hover:not(:disabled) {
-          background: rgba(51, 65, 85, 0.5);
-          color: #e2e8f0;
-        }
-        .btn-disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-        .btn-sm {
-          padding: 3px 9px;
-          font-size: 11px;
-        }
-        .app-footer {
-          margin-top: 24px;
-          padding-top: 12px;
-          border-top: 1px solid #1e293b;
-          text-align: center;
-          font-size: 11px;
-          color: #475569;
-        }
-      `}</style>
+      <Footer />
     </div>
   )
 }

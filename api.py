@@ -32,15 +32,20 @@ if _HERE not in sys.path:
 # Load .env so VENDOR_URL / X402_ENABLED etc. are available to agent.py
 try:
     from dotenv import load_dotenv
-
     load_dotenv()
 except Exception:
     pass
+
+# Re-read env so VENDOR_URL / X402_ENABLED are defined for the proxy endpoints
+# below (these run in uvicorn workers that don't import agent.py).
+VENDOR_URL = os.environ.get("VENDOR_URL", "http://localhost:8777")
+X402_ENABLED = os.environ.get("X402_ENABLED", "false").lower() == "true"
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import requests
 
 # ---------------------------------------------------------------------------
 # Import the HaggleMind modules we depend on
@@ -61,7 +66,14 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000", "null"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:8000",
+        "null",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -118,12 +130,82 @@ def get_memory() -> dict[str, Any]:
 
 
 # ===========================================================================
+# /api/inject — proxy invoice injection to vendor server
+# ===========================================================================
+
+class InjectRequest(BaseModel):
+    vendor: str
+    amount: float
+
+
+class InjectResponse(BaseModel):
+    injected: bool
+    vendor: str
+    amount: float
+    message: str
+
+
+@app.post("/api/inject", response_model=InjectResponse)
+def inject_invoice(req: InjectRequest) -> InjectResponse:
+    """Proxy a POST to the vendor server's /inject_invoice endpoint.
+
+    The frontend's "inject invoice" button calls this so the browser never
+    talks directly to the vendor server (avoids CORS issues on the vendor port).
+    """
+    try:
+        r = requests.post(
+            f"{VENDOR_URL}/inject_invoice",
+            json={"vendor": req.vendor, "amount": req.amount},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return InjectResponse(
+                injected=True,
+                vendor=req.vendor,
+                amount=req.amount,
+                message=r.json().get("message", "Invoice injected") if r.headers.get("content-type", "").startswith("application/json") else "Invoice injected",
+            )
+        return InjectResponse(
+            injected=False,
+            vendor=req.vendor,
+            amount=req.amount,
+            message=f"Vendor returned HTTP {r.status_code}",
+        )
+    except requests.RequestException as exc:
+        return InjectResponse(
+            injected=False,
+            vendor=req.vendor,
+            amount=req.amount,
+            message=f"Vendor unreachable: {exc}",
+        )
+
+
+@app.get("/api/vendor-health")
+def vendor_health() -> dict[str, Any]:
+    """Best-effort probe of the vendor server (Terminal 1) at :8777/health."""
+    try:
+        r = requests.get(f"{VENDOR_URL}/health", timeout=3)
+        if r.status_code == 200:
+            body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            return {
+                "alive": True,
+                "status": body.get("status", "ok"),
+                "version": body.get("version", ""),
+                "timestamp": body.get("timestamp", ""),
+            }
+        return {"alive": False, "status": f"HTTP {r.status_code}"}
+    except requests.RequestException as exc:
+        return {"alive": False, "status": str(exc)}
+
+
+# ===========================================================================
 # /api/logs — agent_logs + transactions
 # ===========================================================================
 
 class LogsResponse(BaseModel):
     agent_logs: list[dict[str, Any]]
     transactions: list[dict[str, Any]]
+    action_steps: list[dict[str, Any]]
 
 
 @app.get("/api/logs", response_model=LogsResponse)
@@ -132,6 +214,7 @@ def get_logs(limit: int = 50) -> LogsResponse:
     try:
         agent_logs = persistence.get_agent_logs(limit=limit)
         transactions = persistence.get_transactions(limit=limit)
+        action_steps = persistence.get_action_steps(limit=limit)
         # Normalise tx_hash: web3 receipt.transactionHash.hex() returns the
         # hex WITHOUT the 0x prefix; our frontend's isRealHash() requires a
         # 66-char 0x-prefixed string.  Prepend 0x for real hashes stored
@@ -144,7 +227,7 @@ def get_logs(limit: int = 50) -> LogsResponse:
             h = log.get("tx_hash", "")
             if h and not h.startswith("0x"):
                 log["tx_hash"] = "0x" + h
-        return LogsResponse(agent_logs=agent_logs, transactions=transactions)
+        return LogsResponse(agent_logs=agent_logs, transactions=transactions, action_steps=action_steps)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read logs: {exc}")
 
@@ -197,7 +280,9 @@ def trigger_run(req: RunRequest | None = None) -> RunResponse:
                 vendor=None,
             )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Agent run failed: {exc}")
+        import traceback as _tb
+        _tb.print_exc()
+        raise HTTPException(status_code=500, detail=f"Agent run failed: {exc}") from exc
 
 
 # ===========================================================================
@@ -346,6 +431,7 @@ def verify_on_chain(tx_hash: str) -> ChainProofResponse:
 
 if __name__ == "__main__":
     port = int(os.environ.get("API_PORT", "8000"))
+    print(f"[api] x402 enabled: {os.environ.get('X402_ENABLED')}")
     print(f"[api] Starting HaggleMind FastAPI backend on http://0.0.0.0:{port}")
     print(f"[api] Frontend should point to http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

@@ -1,0 +1,55 @@
+{
+  "Comcast": {
+    "competitor_promo": {
+      "accept_prob": 0.85,
+      "discount": 0.4,
+      "label": "Competitor promo works well"
+    },
+    "loyalty_discount": {
+      "accept_prob": 0.55,
+      "discount": 0.15,
+      "label": "Loyalty discount sometimes works"
+    },
+    "budget_hardship": {
+      "accept_prob": 0.25,
+      "discount": 0.1,
+      "label": "Budget hardship rarely works"
+    }
+  },
+  "Netflix": {
+    "competitor_promo": {
+      "accept_prob": 0.7,
+      "discount": 0.3,
+      "label": "Competitor promo works"
+    },
+    "loyalty_discount": {
+      "accept_prob": 0.45,
+      "discount": 0.1,
+      "label": "Loyalty discount sometimes works"
+    }
+  },
+  "Spotify": {
+    "competitor_promo": {
+      "accept_prob": 0.4,
+      "discount": 0.2,
+      "label": "Competitor promo rarely works"
+    },
+    "loyalty_discount": {
+      "accept_prob": 0.75,
+      "discount": 0.25,
+      "label": "Loyalty discount works well"
+    }
+  },
+  "DisneyPlus": {
+    "competitor_promo": {
+      "accept_prob": 0.6,
+      "discount": 0.25,
+      "label": "Competitor promo sometimes works"
+    },
+    "budget_hardship": {
+      "accept_prob": 0.5,
+      "discount": 0.15,
+      "label": "Budget hardship sometimes works"
+    }
+  }
+}

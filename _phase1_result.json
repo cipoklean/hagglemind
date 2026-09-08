@@ -1,0 +1,14 @@
+{
+  "vendor": "Comcast",
+  "status": "success",
+  "tactic_used": "competitor_promo",
+  "confidence_before": 0.9,
+  "confidence_after": 0.95,
+  "original_amount": 120.0,
+  "final_amount": 72.0,
+  "savings": 48.0,
+  "accepted": true,
+  "payment_mode": "direct_api",
+  "tx_hash": "",
+  "explorer": ""
+}

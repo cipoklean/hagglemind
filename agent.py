@@ -16,6 +16,13 @@ from typing import Optional
 
 import requests
 
+# Load .env automatically so X402_ENABLED, VENDOR_BURNER_WALLET, etc. are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -135,7 +142,7 @@ def negotiate_bill(vendor: str) -> dict:
     # Step 1: Check invoice
     invoice = check_invoice(vendor)
     if not invoice:
-        _log_step(vendor, 1, "error", f"No invoice for {vendor}")
+        _log_step(vendor, 1, "skip", f"No invoice for {vendor}")
         sibyl_memory.set_running(False)
         return {"vendor": vendor, "status": "no_invoice", "message": f"No invoice for {vendor}"}
 

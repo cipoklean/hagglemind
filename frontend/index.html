@@ -1,13 +1,611 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HaggleMind — Web3 Dashboard</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HaggleMind — Autonomous Bill Negotiator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,500italic&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        paper: '#F3EDDF',
+        'paper-deep': '#E9E0CC',
+        ink: '#1C1917',
+        'ink-soft': '#5F594F',
+        accent: '#2F5573',
+        verified: '#0E9384',
+        rejected: '#B3402A',
+        gold: '#B08D57',
+        hairline: 'rgba(28,25,23,0.32)',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        body: ['Inter', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
+      },
+    }
+  }
+}
+</script>
+<style>
+  :root { --paper: #F3EDDF; --paper-deep: #E9E0CC; --ink: #1C1917; --ink-soft: #5F594F; --accent: #2F5573; --verified: #0E9384; --rejected: #B3402A; --gold: #B08D57; --hairline: rgba(28,25,23,0.32); }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { background-color: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }
+  
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--paper-deep); }
+  ::-webkit-scrollbar-thumb { background: var(--ink-soft); border-radius: 4px; }
+  
+  .hairline { border-top: 1px solid var(--hairline); }
+  .page { max-width: 1120px; margin: 0 auto; padding: 0 24px 80px; }
+  .main { padding-top: 32px; }
+  
+  /* Hero */
+  .hero-headline { font-family: 'Fraunces', serif; font-weight: 600; font-size: clamp(56px, 8vw, 96px); line-height: 0.98; letter-spacing: -0.015em; }
+  .hero-accent { color: var(--accent); display: block; }
+  .hero-kicker { font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; color: var(--ink-soft); letter-spacing: 0.16em; text-transform: uppercase; }
+  .chip { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink); letter-spacing: 0.08em; text-transform: uppercase; background: var(--paper-deep); border: 1px solid rgba(28,25,23,0.45); padding: 5px 10px; border-radius: 4px; white-space: nowrap; }
+  
+  /* Sections */
+  .section { padding: 72px 0; }
+  .section-action { padding-top: 48px; }
+  .section-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 40px; }
+  .section-num { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); letter-spacing: 0.06em; text-transform: uppercase; }
+  .section-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 32px; color: var(--ink); margin: 0; }
+  
+  /* Memory */
+  .vendor-plate { background: var(--paper-deep); border: 1px solid rgba(28,25,23,0.35); border-radius: 8px; padding: 18px 20px; }
+  .vendor-name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; color: var(--ink); margin-bottom: 14px; }
+  .tactic-row { display: flex; align-items: center; gap: 10px; }
+  .tactic-name { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); font-weight: 500; }
+  .tactic-sub { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+  .tactic-score { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); font-weight: 600; min-width: 38px; text-align: right; }
+  .bar-track { position: absolute; inset: 0; background: rgba(28,25,23,0.22); border-radius: 3px; }
+  .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; transition: width 0.3s ease; }
+  .vendor-meta { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--ink-soft); text-align: right; letter-spacing: 0.02em; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hairline); }
+  
+  /* Inject control */
+  .inject-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 0 8px; border-top: 1px solid var(--hairline); margin-bottom: 4px; }
+  .inject-label { display: flex; align-items: center; gap: 6px; }
+  .inject-label-text { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); letter-spacing: 0.1em; text-transform: uppercase; }
+  .inject-select, .inject-amount { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); font-weight: 500; background: var(--paper-deep); border: 1px solid rgba(28,25,23,0.45); border-radius: 4px; padding: 6px 10px; outline: none; }
+  .inject-select:focus, .inject-amount:focus { border-color: var(--accent); }
+  .inject-btn { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--paper); background: var(--accent); border: none; padding: 8px 16px; border-radius: 999px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em; }
+  .inject-btn:hover { background: #274860; }
+  .inject-btn:disabled { opacity: 0.65; cursor: wait; }
+  .inject-result-ok { color: var(--verified); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .inject-result-err { color: var(--rejected); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  
+  /* Terminal */
+  .terminal { background: var(--ink); color: var(--paper-deep); font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.6; padding: 24px; border: 1px solid var(--gold); border-radius: 8px; min-height: 200px; max-height: 420px; overflow-y: auto; box-shadow: inset 0 2px 8px rgba(0,0,0,0.25); display: flex; flex-direction: column; gap: 8px; }
+  .terminal-empty { color: var(--ink-soft); font-size: 12px; padding: 8px 0; }
+  .terminal-line { display: flex; gap: 10px; align-items: baseline; white-space: pre-wrap; word-break: break-word; }
+  .terminal-ts { font-size: 11px; color: var(--ink-soft); flex-shrink: 0; }
+  .terminal-tag { font-size: 10px; color: var(--ink-soft); text-transform: uppercase; flex-shrink: 0; min-width: 28px; }
+  .terminal-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .terminal-vendor { color: var(--gold); font-size: 11px; }
+  .terminal-msg { color: var(--paper-deep); }
+  .terminal-caption { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); letter-spacing: 0.04em; margin-left: 4px; }
+  
+  /* Body text bump */
+  body { font-size: 17px; }
+  
+  /* Run button */
+  .run-pill { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--paper-deep); background: var(--verified); border: none; padding: 9px 18px; border-radius: 999px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em; }
+  .run-pill:hover:not(:disabled) { background: #0b8373; }
+  .run-pill:disabled { background: var(--ink-soft); opacity: 0.7; cursor: wait; }
+  .run-status { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+  .run-status-err { color: var(--rejected); }
+  
+  /* Settlement table */
+  .history-toggle { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--accent); background: none; border: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; letter-spacing: 0.04em; text-transform: uppercase; align-self: flex-start; }
+  .tx-table { display: flex; flex-direction: column; gap: 0; }
+  .tx-row { display: grid; grid-template-columns: 1fr 120px 80px 140px 140px 100px 1fr; gap: 16px; align-items: center; padding: 14px 16px; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); background: var(--paper-deep); }
+  .tx-row:hover { background: var(--paper); }
+  .tx-row-mock { opacity: 0.72; }
+  .tx-cell { display: flex; align-items: center; gap: 6px; }
+  .tx-hash-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--ink-soft); text-transform: uppercase; }
+  .tx-hash-code { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .basescan-link { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+  .tx-vendor-name, .tx-amount { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); font-weight: 500; }
+  
+  /* Mode chips */
+  .mode-chip { font-family: 'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 4px; }
+  .mode-chip-onchain { color: var(--verified); border: 1px solid rgba(14,147,132,0.45); }
+  .mode-chip-direct { color: var(--ink-soft); border: 1px solid var(--hairline); }
+  .mode-chip-unknown { color: var(--ink-soft); border: 1px solid var(--hairline); }
+  
+  /* Verify button */
+  .verify-btn { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink); font-weight: 500; background: transparent; border: 1px solid rgba(28,25,23,0.6); padding: 5px 11px; border-radius: 4px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em; }
+  .verify-btn:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+  .verify-btn:disabled { opacity: 0.6; cursor: wait; }
+  .verify-btn-mock { color: var(--ink-soft); border: 1px solid var(--hairline); cursor: not-allowed; opacity: 0.55; }
+  
+  /* Stamps */
+  .proof-stamp { font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; border-radius: 4px; }
+  .stamp-verified { color: var(--verified); background: rgba(14,147,132,0.12); border: 1px solid rgba(14,147,132,0.25); }
+  .stamp-rejected { color: var(--rejected); background: rgba(179,64,42,0.12); border: 1px solid rgba(179,64,42,0.25); }
+  .stamp-detail { font-weight: 400; color: var(--verified); }
+  
+  /* Footer health */
+  .vendor-health-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-soft); display: inline-block; transition: background 0.2s; }
+  .vendor-health-alive { background: var(--verified); box-shadow: 0 0 0 2px rgba(14,147,132,0.2); }
+  .vendor-health-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); text-transform: uppercase; }
+  .footer-left { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+  .footer-right { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--accent); text-decoration: underline; }
+  
+  /* Misc */
+  .section-error { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--rejected); margin: 0 0 12px; }
+  .section-empty { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); margin: 0 0 12px; }
+  .section-warn { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); border-left: 2px solid var(--gold); padding-left: 10px; margin: 0; }
+  .refresh-link { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .topbar-brand { font-family: 'Fraunces', serif; font-weight: 600; font-size: 30px; color: var(--ink); }
+  .topbar-tag { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); letter-spacing: 0.16em; text-transform: uppercase; }
+  .topbar-chip { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); background: var(--paper-deep); border: 1px solid var(--hairline); padding: 4px 10px; border-radius: 4px; display: inline-flex; align-items: center; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--verified); box-shadow: 0 0 0 2px rgba(14,147,132,0.2); display: inline-block; margin-right: 6px; }
+  .kicker-rule { display: inline-block; width: 36px; height: 1px; background: var(--gold); margin-left: 10px; }
+  .ts-run { color: #9aa5b1; }
+  .ts-err { color: #cf564b; }
+  .ts-warn { color: #b2782a; }
+  .ts-pay { color: #61a2b0; }
+  .ts-ok { color: #6ecf9a; }
+  .ts-dec { color: #89a6c6; }
+  .ts-mem { color: #6a7a8a; }
+  .ts-vnd { color: #c9a97a; }
+  .ts-act { color: #7a8a9a; }
+  .ts-info { color: var(--ink-soft); }
+  .ts-skip { color: var(--ink-soft); }
+</style>
+</head>
+<body class="bg-paper text-ink font-body antialiased">
+<div class="page">
+  <!-- Top Bar -->
+  <header class="w-full flex items-start justify-between gap-6 pb-4" style="border-bottom: 2px solid var(--ink);">
+    <div class="flex flex-col gap-0.5">
+      <h1 class="font-display text-[30px] font-semibold tracking-[-0.01em] text-ink m-0 leading-[1.1]">HaggleMind</h1>
+      <div class="font-mono text-[11px] uppercase tracking-[0.16em] whitespace-nowrap" style="color: var(--ink-soft);">Autonomous Bill Negotiator</div>
+    </div>
+    <div class="ml-auto shrink-0 flex items-center gap-2 border rounded-[4px] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em]" style="border-color: rgba(28,25,23,0.45); color: var(--ink-soft);">
+      <span class="w-2 h-2 rounded-full" style="background: #0E9384;"></span>
+      Base Sepolia · Live
+    </div>
+  </header>
+
+  <main class="pt-8">
+    <!-- Hero -->
+    <section class="py-16 pb-4">
+      <p class="hero-kicker flex items-center gap-2.5 mb-7"><span>BUILD LOG · SIBYL LABS MEMORY HACKATHON</span><span class="kicker-rule" aria-hidden="true"></span></p>
+      <h2 class="hero-headline text-ink mt-0 mb-5">
+        <span>Negotiation that</span>
+        <span class="hero-accent">remembers.</span>
+      </h2>
+      <p class="font-body text-lg text-ink-soft leading-[1.55] max-w-[52ch] mb-9">
+        HaggleMind keeps a load-bearing memory of every vendor: what worked, what failed, what it cost. That memory changes the price it pays. Settled onchain via x402.
+      </p>
+      <div class="flex flex-wrap gap-2" role="list">
+        <span class="chip">LIVE ON BASE SEPOLIA</span>
+        <span class="chip">X402 SETTLED</span>
+        <span class="chip">SIBYL MEMORY SDK</span>
+        <span class="chip">DELETE MEMORY → PAYS MORE</span>
+        <span class="chip">CHAIN-VERIFIED UI</span>
+      </div>
+    </section>
+
+    <!-- Section 01: Memory -->
+    <section class="section section-memory">
+      <hr class="hairline mb-10" />
+      <div class="flex items-baseline gap-2 mb-10 pb-8">
+        <span class="section-num">01 /</span>
+        <h2 class="section-title">What it remembers.</h2>
+      </div>
+      <div id="memory-body" class="flex flex-col gap-5 data-text">
+        <button class="refresh-link mt-4" onclick="refreshMemory()">refresh ↻</button>
+      </div>
+    </section>
+
+    <!-- Section 02: Action -->
+    <div style="background: var(--paper-deep); margin: 0 -24px; padding: 72px 24px;">
+    <section class="section section-action">
+      <hr class="hairline mb-10" />
+      <div class="flex items-baseline gap-2 mb-10 pb-8">
+        <span class="section-num">02 /</span>
+        <h2 class="section-title">Watch it think.</h2>
+      </div>
+      <div class="flex flex-col gap-4">
+        <div id="inject-section" class="inject-row">
+          <label class="inject-label"><span class="inject-label-text">Vendor</span>
+            <select id="vendor-select" class="inject-select">
+              <option value="Comcast">Comcast</option>
+              <option value="Netflix">Netflix</option>
+              <option value="Spotify">Spotify</option>
+              <option value="DisneyPlus">DisneyPlus</option>
+            </select>
+          </label>
+          <label class="inject-label"><span class="inject-label-text">Amount</span>
+            <input id="amount-input" class="inject-amount" type="number" step="0.01" min="0.01" value="1.00" />
+          </label>
+          <button class="inject-btn" onclick="injectInvoice()">inject invoice</button>
+          <span id="inject-result" class="inject-result"></span>
+        </div>
+        
+        <div id="terminal" class="terminal">
+          <div class="terminal-empty">Console idle: press Run to start</div>
+        </div>
+        
+        <div class="terminal-caption">fig. 02: live transcript, polled from /api/logs</div>
+        
+        <div id="action-control" class="flex items-center gap-3 flex-wrap">
+          <button id="run-btn" class="run-pill" onclick="runAgent()">Run negotiation agent</button>
+          <span id="run-status" class="run-status"></span>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <!-- Section 03: Settlement -->
+    <section class="section section-settlement">
+      <hr class="hairline mb-10" />
+      <div class="flex items-baseline gap-2 mb-10 pb-8">
+        <span class="section-num">03 /</span>
+        <h2 class="section-title">Proof, not promises.</h2>
+      </div>
+      <div id="settlement-body" class="flex flex-col gap-3">
+        <button id="history-toggle" class="history-toggle hidden" onclick="toggleHistory()">show full history</button>
+        <div id="tx-table" class="tx-table"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="pt-10 mt-8">
+    <hr class="hairline mb-0" />
+    <div class="flex items-center justify-between gap-4 flex-wrap pt-5">
+      <span class="footer-left">Sibyl Memory · Base · x402. Built for the Sibyl Labs Memory Hackathon</span>
+      <span id="vendor-health" class="inline-flex items-center gap-1.5" title="Vendor server health">
+        <span class="vendor-health-dot" id="health-dot"></span>
+        <span class="vendor-health-label" id="health-label">terminal 1 · …</span>
+      </span>
+      <a href="https://github.com/cipoklean/veriflow" target="_blank" rel="noopener noreferrer" class="footer-right">repo ↗</a>
+    </div>
+  </footer>
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+const VENDORS = ['Comcast', 'Netflix', 'Spotify', 'DisneyPlus'];
+let steps = [];
+let pollTimer = null;
+let currentVendor = 'Comcast';
+let currentAmount = '1.00';
+let showAll = false;
+let verifying = {};
+let proofs = {};
+
+// ── Helpers ──
+function isRealHash(h) { return typeof h === 'string' && h.startsWith('0x') && h.length === 66; }
+function fmtTs(ts) { if (!ts) return '—'; try { return new Date(ts).toLocaleString(); } catch { return ts; } }
+function num(n) { return String(n).padStart(2,'0'); }
+function cap(s) { return s.toUpperCase(); }
+
+// ── Memory Section ──
+async function refreshMemory() {
+  const body = document.getElementById('memory-body');
+  body.innerHTML = '<p class="font-mono text-sm text-ink-soft">Loading…</p>';
+  try {
+    const r = await fetch(`${API}/api/memory`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const vendors = d.vendors || {};
+    const entries = Object.entries(vendors).sort((a,b) => a[0].localeCompare(b[0])).filter(([v]) => v);
+    
+    // Load transactions for last-settled metadata
+    let txs = [];
+    try {
+      const tr = await fetch(`${API}/api/logs?limit=50`);
+      if (tr.ok) {
+        const td = await tr.json();
+        txs = td.transactions || [];
+      }
+    } catch {}
+    
+    // Build vendor → last settled lookup
+    const lastSettled = {};
+    for (const tx of txs) {
+      if (tx.vendor && tx.amount_usd != null && tx.timestamp) {
+        const existing = lastSettled[tx.vendor];
+        if (!existing || new Date(tx.timestamp) > new Date(existing.ts)) {
+          lastSettled[tx.vendor] = { amt: tx.amount_usd, ts: tx.timestamp };
+        }
+      }
+    }
+    
+    if (!entries.length) {
+      body.innerHTML = '<p class="font-mono text-sm text-ink-soft">No vendor memory yet: run the agent to populate Sibyl Memory.</p>';
+      return;
+    }
+    
+    let html = '';
+    for (const [vendor, tactics] of entries) {
+      const meta = lastSettled[vendor];
+      const metaHtml = meta ? `<div class="vendor-meta">last settled · $${Number(meta.amt).toFixed(2)} · ${new Date(meta.ts).toLocaleDateString('en-US', {month:'numeric', day:'numeric'})}</div>` : '';
+      html += `<div class="vendor-plate">
+        <div class="vendor-name">${vendor}</div>
+        <div class="flex flex-col gap-2">`;
+      for (const [tactic, data] of Object.entries(tactics)) {
+        const conf = data?.confidence ?? 0;
+        const pct = Math.min(100, Math.max(2, conf * 100));
+        const s = data?.successes ?? 0;
+        const f = data?.failures ?? 0;
+        html += `<div class="tactic-row">
+          <div class="flex flex-col gap-0.5 min-w-0">
+            <span class="tactic-name">${tactic}</span>
+            <span class="tactic-sub">${num(s)}s / ${num(f)}f</span>
+          </div>
+          <div style="position:relative;width:96px;height:6px;background:transparent;flex-shrink:0;border-radius:3px;overflow:hidden">
+            <div class="bar-track"></div>
+            <div class="bar-fill" style="width:${pct}%"></div>
+          </div>
+          <span class="tactic-score">${conf.toFixed(2)}</span>
+        </div>`;
+      }
+      html += `</div>${metaHtml}</div>`;
+    }
+    body.innerHTML = html + '<button class="refresh-link mt-4" onclick="refreshMemory()">refresh ↻</button>';
+  } catch (e) {
+    body.innerHTML = `<p class="section-error">Error loading memory: ${e.message}</p>`;
+  }
+}
+
+// ── Inject ──
+async function injectInvoice() {
+  const vendor = document.getElementById('vendor-select').value;
+  const amount = parseFloat(document.getElementById('amount-input').value) || 1.0;
+  const resultEl = document.getElementById('inject-result');
+  resultEl.textContent = 'injecting…';
+  resultEl.className = 'inject-result';
+  try {
+    const r = await fetch(`${API}/api/inject`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({vendor, amount}) });
+    const d = await r.json().catch(() => ({}));
+    if (d.injected) {
+      resultEl.textContent = `injected · ${d.vendor} · $${d.amount.toFixed(2)}`;
+      resultEl.className = 'inject-result-ok';
+    } else {
+      resultEl.textContent = d.message || 'inject failed';
+      resultEl.className = 'inject-result-err';
+    }
+  } catch (e) {
+    resultEl.textContent = e.message;
+    resultEl.className = 'inject-result-err';
+  }
+}
+
+// ── Console ──
+function pollLogs() {
+  fetch(`${API}/api/logs?limit=200`).then(r => r.json()).then(d => {
+    const raw = (d.action_steps && d.action_steps.length > 0) ? d.action_steps : d.agent_logs || [];
+    const normalised = raw.map(s => {
+      const msg = s.message && typeof s.message === 'string' ? s.message : s.note && typeof s.note === 'string' ? s.note : '';
+      return { id: s.id ?? s.step_num ?? Math.random().toString(36).slice(2), ts: s.timestamp ?? '', vendor: s.vendor ?? '', type: s.step_type ?? 'info', message: msg };
+    });
+    const ordered = [...normalised].reverse();
+    const seen = new Set(steps.map(p => p.id));
+    const fresh = ordered.filter(s => !seen.has(s.id) && s.message !== '');
+    if (fresh.length) {
+      steps = [...fresh, ...steps];
+      renderTerminal();
+    }
+  }).catch(() => {});
+}
+
+function typeLabel(t) {
+  const map = { run:'RUN', info:'·', memory:'MEM', decision:'DEC', action:'ACT', vendor:'VND', result:'OK', payment:'PAY', error:'ERR', warning:'WARN', skip:'SKIP' };
+  return map[t] || '·';
+}
+function typeColor(t) {
+  const map = { run:'ts-run', error:'ts-err', warning:'ts-warn', payment:'ts-pay', result:'ts-ok', decision:'ts-dec', memory:'ts-mem', vendor:'ts-vnd', action:'ts-act', skip:'ts-skip' };
+  return map[t] || 'ts-info';
+}
+
+function renderTerminal() {
+  const term = document.getElementById('terminal');
+  if (!steps.length) {
+    term.innerHTML = '<div class="terminal-empty">Console idle: press Run to start</div>';
+    return;
+  }
+  term.innerHTML = steps.map(s => `<div class="terminal-line ${typeColor(s.type)}">
+    <span class="terminal-ts">${fmtTs(s.ts)}</span>
+    <span class="terminal-tag">${typeLabel(s.type)}</span>
+    <span class="terminal-body">
+      <span class="terminal-vendor">[${s.vendor}]</span>
+      <span class="terminal-msg">${s.message || '·'}</span>
+    </span>
+  </div>`).join('');
+  term.scrollTop = term.scrollHeight;
+}
+
+async function runAgent() {
+  const btn = document.getElementById('run-btn');
+  const status = document.getElementById('run-status');
+  const vendor = document.getElementById('vendor-select').value;
+  const amount = parseFloat(document.getElementById('amount-input').value) || 1.0;
+  
+  btn.disabled = true;
+  btn.textContent = 'Run in progress…';
+  status.textContent = '';
+  status.className = 'run-status';
+  steps = [];
+  renderTerminal();
+  
+  // Inject first
+  try {
+    const ir = await fetch(`${API}/api/inject`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({vendor, amount}) });
+    const id = await ir.json().catch(() => ({}));
+    if (!id.injected) {
+      status.textContent = `Inject failed: ${id.message || 'unknown'}`;
+      status.className = 'run-status run-status-err';
+      btn.disabled = false;
+      btn.textContent = 'Run negotiation agent';
+      return;
+    }
+  } catch (e) {
+    status.textContent = `Inject failed: ${e.message}`;
+    status.className = 'run-status run-status-err';
+    btn.disabled = false;
+    btn.textContent = 'Run negotiation agent';
+    return;
+  }
+  
+  // Then run
+  const ctrl = new AbortController();
+  const tm = setTimeout(() => ctrl.abort(), 90000);
+  try {
+    const r = await fetch(`${API}/api/run`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({vendor}), signal: ctrl.signal });
+    clearTimeout(tm);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    await new Promise(r => setTimeout(r, 1500));
+    btn.disabled = false;
+    btn.textContent = 'Run negotiation agent';
+    status.textContent = '';
+  } catch (e) {
+    clearTimeout(tm);
+    if (e.name === 'AbortError') {
+      status.textContent = 'Run timed out: checking logs for progress…';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Run negotiation agent'; }, 10000);
+    } else {
+      status.textContent = e.message;
+      status.className = 'run-status run-status-err';
+      btn.disabled = false;
+      btn.textContent = 'Run negotiation agent';
+    }
+  }
+}
+
+// ── Settlement ──
+async function refreshTx() {
+  try {
+    const r = await fetch(`${API}/api/logs?limit=50`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    renderTransactions(d.transactions || []);
+  } catch (e) {
+    document.getElementById('tx-table').innerHTML = `<p class="section-error">Error: ${e.message}</p>`;
+  }
+}
+
+function renderTransactions(txs) {
+  const real = txs.filter(t => isRealHash(t.tx_hash));
+  const mock = txs.filter(t => !isRealHash(t.tx_hash));
+  const tbl = document.getElementById('tx-table');
+  const toggle = document.getElementById('history-toggle');
+  
+  if (!txs.length) {
+    tbl.innerHTML = '<p class="section-empty">No transactions yet: run the agent to generate on-chain payments.</p>';
+    toggle.classList.add('hidden');
+    return;
+  }
+  
+  if (mock.length && !showAll) {
+    toggle.textContent = `show full history · ${mock.length} mock`;
+    toggle.classList.remove('hidden');
+  } else {
+    toggle.classList.add('hidden');
+  }
+  
+  const rows = showAll ? txs : real;
+  if (!rows.length && !showAll) {
+    tbl.innerHTML = '<p class="section-warn">All recorded transactions are vendor mock markers. Only real 66-char hex hashes can be verified on-chain.</p>';
+    return;
+  }
+  
+  tbl.innerHTML = rows.map(tx => {
+    const real = isRealHash(tx.tx_hash);
+    const mode = (tx.payment_mode || 'unknown').toUpperCase().replace(/_/g, ' ');
+    const isOnchain = mode === 'X402 ONCHAIN';
+    const isDirect = mode === 'DIRECT API';
+    const amt = tx.amount_usd != null ? `$${Number(tx.amount_usd).toFixed(2)}` : '—';
+    const hashShort = tx.tx_hash ? `${tx.tx_hash.slice(0,10)}···${tx.tx_hash.slice(-6)}` : '';
+    const proof = proofs[tx.id];
+    const verified = proof?.verified;
+    const raw = proof?.raw;
+    
+    return `<div class="tx-row ${real ? '' : 'tx-row-mock'}">
+      <div class="tx-cell data-text">
+        <span class="tx-hash-label">Tx</span>
+        <code class="tx-hash-code">${hashShort}</code>
+        ${real ? `<a href="https://sepolia.basescan.org/tx/${tx.tx_hash}" target="_blank" rel="noopener" class="basescan-link">basescan ↗</a>` : '<span class="font-mono text-[10px] text-ink-soft uppercase tracking-[0.06em] border border-hairline px-1 py-0.5 rounded">mock</span>'}
+      </div>
+      <div class="tx-cell data-text"><span class="tx-vendor-name">${tx.vendor || '—'}</span></div>
+      <div class="tx-cell data-text"><span class="tx-amount">${amt}</span></div>
+      <div class="tx-cell data-text">
+        <span class="mode-chip ${isOnchain ? 'mode-chip-onchain' : isDirect ? 'mode-chip-direct' : 'mode-chip-unknown'}" title="${isDirect ? 'settled off-chain (dev fallback)' : isOnchain ? 'settled on-chain via x402' : mode}">${mode}</span>
+      </div>
+      <div class="tx-cell data-text">
+        ${real ? `<button class="verify-btn" data-hash="${tx.tx_hash}" onclick="verifyTx(this.dataset.hash)">verify on chain</button>` : '<span class="verify-btn-mock">verify on chain</span>'}
+      </div>
+      ${real ? `<div class="tx-cell data-text"><a href="https://sepolia.basescan.org/tx/${tx.tx_hash}" target="_blank" rel="noopener" class="basescan-link">basescan ↗</a></div>` : ''}
+      ${proof ? `<div class="tx-cell data-text"><span class="proof-stamp ${verified ? 'stamp-verified' : 'stamp-rejected'}">${verified ? `<span>VERIFIED</span>${raw ? `<span class="stamp-detail"> · BLOCK ${raw.blockNumber?.toLocaleString()} · GAS ${raw.gasUsed?.toLocaleString()}</span>` : ''}` : 'REJECTED · NOT ON CHAIN'}</span></div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function verifyTx(hash) {
+  // Find tx by hash to get id
+  const r = await fetch(`${API}/api/logs?limit=50`);
+  const d = await r.json();
+  const tx = (d.transactions || []).find(t => t.tx_hash === hash);
+  if (!tx) return;
+  
+  verifying = { ...verifying, [tx.id]: true };
+  renderTransactions(d.transactions || []);
+  
+  try {
+    const res = await fetch(`${API}/api/chain-proof/${encodeURIComponent(hash)}`);
+    const data = await res.json();
+    proofs = { ...proofs, [tx.id]: data };
+  } catch (e) {
+    proofs = { ...proofs, [tx.id]: { verified: false, hash, error: e.message } };
+  } finally {
+    verifying = { ...verifying, [tx.id]: false };
+  }
+  renderTransactions(d.transactions || []);
+}
+
+function toggleHistory() {
+  showAll = !showAll;
+  refreshTx();
+}
+
+// ── Vendor Health ──
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/api/vendor-health`);
+    const d = await r.json().catch(() => ({}));
+    const dot = document.getElementById('health-dot');
+    const label = document.getElementById('health-label');
+    if (d.alive) {
+      dot.className = 'vendor-health-dot vendor-health-alive';
+      label.textContent = 'terminal 1 · alive';
+    } else {
+      dot.className = 'vendor-health-dot';
+      label.textContent = 'terminal 1 · down';
+    }
+  } catch {
+    document.getElementById('health-label').textContent = 'terminal 1 · unreachable';
+  }
+}
+
+// ── Init ──
+refreshMemory();
+pollTimer = setInterval(pollLogs, 1500);
+refreshTx();
+checkHealth();
+setInterval(checkHealth, 10000);
+</script>
+</body>
 </html>

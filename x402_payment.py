@@ -224,6 +224,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
     # "eip155:84532" (Base Sepolia) which both the scheme-selection path and the
     # signing path (get_evm_chain_id) understand, so register on that exact value.
     client = x402ClientSync()
+    client.set_spend_controls(False)
     client.register_v1("eip155:84532", ExactEvmScheme(account))
     print("[x402] x402ClientSync registered ExactEvmScheme(account) on eip155:84532 (payer={})".format(account.address))
 

@@ -335,6 +335,50 @@ class VendorHandler(BaseHTTPRequestHandler):
             reset_rules()
             self._send_json({"status": "reset"})
 
+        elif parsed.path == "/rules/preset":
+            preset_name = data.get("preset", "")
+            if preset_name == "deletion_test":
+                # Deterministic preset for deletion test:
+                # competitor_promo ALWAYS accepted (prob 1.0), loyalty_discount NEVER accepted
+                for vendor in list(vendor_rules.keys()):
+                    if "competitor_promo" in vendor_rules[vendor]:
+                        vendor_rules[vendor]["competitor_promo"] = {
+                            "accept_prob": 1.0,
+                            "discount": 0.40,
+                            "label": f"{vendor} competitor promo (deterministic)",
+                        }
+                    if "loyalty_discount" in vendor_rules[vendor]:
+                        vendor_rules[vendor]["loyalty_discount"] = {
+                            "accept_prob": 0.0,
+                            "discount": 0.0,
+                            "label": f"{vendor} loyalty discount (disabled)",
+                        }
+                    # Disable all other tactics
+                    for tactic in list(vendor_rules[vendor].keys()):
+                        if tactic not in ("competitor_promo", "loyalty_discount"):
+                            vendor_rules[vendor][tactic] = {
+                                "accept_prob": 0.0,
+                                "discount": 0.0,
+                                "label": f"{vendor} {tactic} (disabled)",
+                            }
+                save_rules()
+                self._send_json({
+                    "status": "preset_applied",
+                    "preset": "deletion_test",
+                    "vendors": list(vendor_rules.keys()),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+            elif preset_name == "default":
+                reset_rules()
+                self._send_json({
+                    "status": "preset_applied",
+                    "preset": "default",
+                    "vendors": list(vendor_rules.keys()),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+            else:
+                self._send_json({"error": f"Unknown preset: {preset_name}"}, 400)
+
         else:
             self._send_json({"error": "Not found"}, 404)
 

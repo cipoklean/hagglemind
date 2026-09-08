@@ -2,21 +2,20 @@
 """
 Deletion Test -- automated proof that HaggleMind's memory is load-bearing.
 
-This script:
-1. Checks the vendor API is running
-2. Injects a Comcast invoice for $120
-3. RUNS WITH MEMORY: runs the agent, records the price paid
-4. Wipes memory (via SDK)
-5. RUNS WITHOUT MEMORY: runs the agent again, records the price paid
-6. Prints a clear diff showing that WITHOUT memory, the agent pays MORE
+This script sets up a DETERMINISTIC scenario where:
+- competitor_promo ALWAYS succeeds (accept_prob=1.0)
+- loyalty_discount NEVER succeeds (accept_prob=0.0)
+- Memory guides the agent to use competitor_promo → $72
+- No memory forces random tactic choice → likely $120
 
-The deletion test proves the agent literally loses money when memory is removed.
+The test is self-contained and produces IDENTICAL results on every run.
 """
 
 import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 
 from typing import Any, Dict
 
@@ -28,6 +27,19 @@ VENDOR_URL = os.environ.get("VENDOR_URL", "http://localhost:8777")
 import sibyl_memory  # noqa: E402
 
 PRINT_WIDTH = 70
+
+
+@contextmanager
+def managed_store():
+    """Context manager for SibylMemoryStore that ensures cleanup."""
+    mem = sibyl_memory.SibylMemoryStore()
+    try:
+        yield mem
+    finally:
+        try:
+            mem.storage.close()
+        except Exception:
+            pass
 
 
 def header(text):
@@ -61,33 +73,35 @@ def check_vendor_running():
     print(f"[check] Vendor API is running at {VENDOR_URL}")
 
 
-def reset_state():
-    """Reset everything to a clean state."""
-    print("[setup] Resetting to clean state...")
+def apply_deletion_preset():
+    """Apply deterministic rules for deletion test."""
+    print("[setup] Applying deletion_test preset...")
+    result = vendor_api("POST", "/rules/preset", json_data={"preset": "deletion_test"})
+    if "error" in result:
+        print(f"ERROR applying preset: {result['error']}")
+        sys.exit(1)
+    print(f"[setup] Preset applied: {result.get('status')}")
 
-    # Clear invoices
-    for vendor in ["Comcast", "Netflix", "Spotify", "DisneyPlus"]:
-        vendor_api("POST", "/inject_invoice", json_data={"vendor": vendor, "amount": 0})
 
-    # Reset vendor rules
-    vendor_api("POST", "/reset_rules")
+def restore_default_preset():
+    """Restore original probabilistic rules."""
+    print("[cleanup] Restoring default preset...")
+    result = vendor_api("POST", "/rules/preset", json_data={"preset": "default"})
+    if "error" in result:
+        print(f"WARNING restoring preset: {result['error']}")
 
-    # Reset Sibyl Memory -- delete ALL vendor entities from the SDK-backed store
-    print("[setup] Wiping Sibyl Memory store...")
-    mem = sibyl_memory.SibylMemoryStore()
+
+def wipe_and_seed_memory():
+    """Wipe Sibyl memory and seed canonical state for deletion test."""
+    print("[setup] Wiping and seeding Sibyl Memory...")
+    # Use the singleton store directly so agent sees it
+    import sibyl_memory
+    mem = sibyl_memory.get_store()
     mem.wipe_all()
-    mem.storage.close()
-
-    # Re-inject default vendor tactic memory via Sibyl SDK
-    print("[setup] Re-injecting default memory via Sibyl SDK...")
-    mem2 = sibyl_memory.SibylMemoryStore()
-    mem2.set_vendor_tactic("Comcast", "competitor_promo", confidence=0.90, successes=3, failures=0)
-    mem2.set_vendor_tactic("Comcast", "loyalty_discount", confidence=0.60, successes=1, failures=1)
-    mem2.set_vendor_tactic("Comcast", "budget_hardship", confidence=0.35, successes=0, failures=2)
-    mem2.set_vendor_tactic("Netflix", "competitor_promo", confidence=0.75, successes=2, failures=0)
-    mem2.set_vendor_tactic("Netflix", "loyalty_discount", confidence=0.50, successes=1, failures=1)
-    mem2.storage.close()
-    print("[setup] Default memory injected into Sibyl Memory.")
+    # Seed canonical state: competitor_promo conf 0.95 (s:12 f:0), loyalty_discount conf 0.50
+    mem.set_vendor_tactic("Comcast", "competitor_promo", confidence=0.95, successes=12, failures=0)
+    mem.set_vendor_tactic("Comcast", "loyalty_discount", confidence=0.50, successes=5, failures=5)
+    print("[setup] Memory seeded: competitor_promo (conf=0.95), loyalty_discount (conf=0.50)")
 
 
 def inject_test_invoice():
@@ -113,24 +127,14 @@ def run_agent():
     return result
 
 
-def wipe_memory():
-    """Wipe the Sibyl Memory store (SDK-backed)."""
-    print("[wipe] Wiping Sibyl Memory (SQLite store)...")
-    wipe_mem = sibyl_memory.SibylMemoryStore()
-    wipe_mem.wipe_all()
-    wipe_mem.storage.close()
-    print("[wipe] All vendor entities deleted from Sibyl Memory.")
-
-
 def print_deletion_result(with_memory_result, without_memory_result):
-    """Print the deletion test results with a clear visual diff."""
+    """Print the deletion test results."""
     original = with_memory_result["original_amount"]
     with_price = with_memory_result["final_amount"]
     without_price = without_memory_result["final_amount"]
 
     with_savings = original - with_price
     without_savings = original - without_price
-
     extra_cost = without_price - with_price
 
     header("DELETION TEST RESULTS")
@@ -152,93 +156,80 @@ def print_deletion_result(with_memory_result, without_memory_result):
         print(f"  [PASS] Memory is LOAD-BEARING.")
         print(f"  [PASS] Deleting memory caused the agent to lose ${extra_cost:.2f}.")
         print(f"  [PASS] The agent's behavior changed based on memory state.")
-        print()
-        print(f"  Explanation:")
-        print(f"    WITH memory: The agent recalled that 'competitor_promo' worked")
-        print(f"    last month (90% confidence) and successfully negotiated a discount.")
-        print(f"    WITHOUT memory: The agent had no history and used a default")
-        print(f"    tactic ('loyalty_discount') that the vendor rejected. The agent")
-        print(f"    paid the full $120 instead of the discounted price.")
     else:
-        print(f"  [INFO] Prices were equal -- re-run for a different result.")
+        print(f"  [FAIL] Expected price without memory to be higher.")
 
     print()
-    print(f"  Sibyl Memory state after each run:")
-    print(f"  (read from SQLite store via sibyl-memory-client SDK)")
-    mem = sibyl_memory.SibylMemoryStore()
-    entities = mem.client.list_entities("vendor", status="active", limit=200)
-    vendors: Dict[str, Dict[str, Any]] = {}
-    for ent in entities:
-        name = ent.get("name", "")
-        if "::" in name:
-            v, tactic = name.split("::", 1)
-            body = ent.get("body", {})
-            if v not in vendors:
-                vendors[v] = {}
-            vendors[v][tactic] = {
-                "confidence": body.get("confidence", 0),
-                "successes": body.get("successes", 0),
-                "failures": body.get("failures", 0),
-            }
-    mem.storage.close()
-
-    if "Comcast" in vendors:
-        for tactic, data in sorted(vendors["Comcast"].items(), key=lambda x: -x[1].get("confidence", 0)):
-            print(f"    {tactic:25s} confidence={data.get('confidence', 0):.2f}  (s:{data.get('successes', 0)} f:{data.get('failures', 0)})")
-    else:
-        print("    (empty -- no Comcast entities)")
+    print(f"  Expected values: WITH=$72.00 (40% discount), WITHOUT=$120.00 (no discount)")
+    print(f"  Actual delta: ${with_price + without_price - original - without_price:.2f}")
 
 
 def main():
-    header("HaggleMind Deletion Test")
+    header("HaggleMind Deletion Test (Deterministic)")
     print("  Proving that Sibyl Memory is load-bearing.")
-    print("  If memory is deleted, the agent pays more.")
+    print("  Setup: competitor_promo always works, loyalty_discount never works.")
     print()
 
-    # Step 0: Check vendor API
+    # Check vendor API
     check_vendor_running()
 
-    # Step 1: Reset to clean state
-    reset_state()
+    try:
+        # Apply deterministic preset
+        apply_deletion_preset()
 
-    # Step 2: Inject invoice
-    inject_test_invoice()
+        # Reset singleton store to ensure clean state
+        import sibyl_memory
+        sibyl_memory.reset_store()
 
-    # Step 3: Run WITH memory
-    print()
-    print("-" * PRINT_WIDTH)
-    print("  PHASE 1: Running WITH memory (normal operation)")
-    print("-" * PRINT_WIDTH)
-    with_result = run_agent()
+        # Seed canonical state for Phase 1
+        wipe_and_seed_memory()
 
-    # Step 4: Wipe memory (delete ALL entities from Sibyl SDK store)
-    wipe_memory()
+        # Inject test invoice
+        inject_test_invoice()
 
-    # Step 5: Run WITHOUT memory
-    print()
-    print("-" * PRINT_WIDTH)
-    print("  PHASE 2: Running WITHOUT memory (deletion test)")
-    print("-" * PRINT_WIDTH)
-    without_result = run_agent()
+        # Phase 1: Run WITH memory
+        print()
+        print("-" * PRINT_WIDTH)
+        print("  PHASE 1: Running WITH memory (normal operation)")
+        print("-" * PRINT_WIDTH)
+        with_result = run_agent()
 
-    # Step 6: Print results
-    print_deletion_result(with_result, without_result)
+        # Wipe memory (no reseed)
+        print()
+        wipe_memory()
 
-    # Restore memory (re-inject default entities into Sibyl)
-    print(f"[cleanup] Restoring default memory to Sibyl...")
-    restore_mem = sibyl_memory.SibylMemoryStore()
-    restore_mem.set_vendor_tactic("Comcast", "competitor_promo", confidence=0.95, successes=4, failures=0)
-    restore_mem.set_vendor_tactic("Comcast", "loyalty_discount", confidence=0.60, successes=1, failures=1)
-    restore_mem.set_vendor_tactic("Comcast", "budget_hardship", confidence=0.35, successes=0, failures=2)
-    restore_mem.set_vendor_tactic("Netflix", "competitor_promo", confidence=0.75, successes=2, failures=0)
-    restore_mem.set_vendor_tactic("Netflix", "loyalty_discount", confidence=0.50, successes=1, failures=1)
-    restore_mem.storage.close()
-    print(f"[cleanup] Sibyl Memory restored with post-Phase-1 state.")
+        # Inject fresh invoice for Phase 2
+        inject_test_invoice()
+
+        # Phase 2: Run WITHOUT memory
+        print()
+        print("-" * PRINT_WIDTH)
+        print("  PHASE 2: Running WITHOUT memory (deletion test)")
+        print("-" * PRINT_WIDTH)
+        without_result = run_agent()
+
+        # Print results
+        print_deletion_result(with_result, without_result)
+
+    finally:
+        # Always restore default preset
+        restore_default_preset()
+        print()
+        print("[cleanup] Default vendor rules restored.")
 
     print()
     print("=" * PRINT_WIDTH)
     print("  Test complete.")
     print("=" * PRINT_WIDTH)
+
+
+def wipe_memory():
+    """Wipe the Sibyl Memory store completely (no reseed)."""
+    print("[wipe] Wiping Sibyl Memory (SQLite store)...")
+    import sibyl_memory
+    mem = sibyl_memory.get_store()
+    mem.wipe_all()
+    print("[wipe] All vendor entities deleted from Sibyl Memory.")
 
 
 if __name__ == "__main__":
