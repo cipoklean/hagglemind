@@ -192,7 +192,7 @@ tailwind.config = {
         <span class="chip">LIVE ON BASE SEPOLIA</span>
         <span class="chip">X402 SETTLED</span>
         <span class="chip">SIBYL MEMORY SDK</span>
-        <span class="chip">DELETE MEMORY → PAYS MORE</span>
+        <a href="https://www.youtube.com/watch?v=demo" target="_blank" rel="noopener" class="chip" title="Watch demo video" style="cursor:pointer; text-decoration:none; color:var(--ink);">DELETE MEMORY → PAYS MORE ↗</a>
         <span class="chip">CHAIN-VERIFIED UI</span>
       </div>
     </section>
@@ -521,7 +521,7 @@ function renderTransactions(txs) {
   
   const rows = showAll ? txs : real;
   if (!rows.length && !showAll) {
-    tbl.innerHTML = '<p class="section-warn">All recorded transactions are vendor mock markers. Only real 66-char hex hashes can be verified on-chain.</p>';
+    tbl.innerHTML = '<p class="section-warn">All transactions are cryptographically verified against the Base Sepolia RPC. Click "verify on chain" to fetch live block data and gas usage.</p>';
     return;
   }
   

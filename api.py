@@ -21,6 +21,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+# Load .env FIRST so X402_ENABLED etc. are available before any imports
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Make sure the project directory is on sys.path so we can import the existing
 # HaggleMind modules (agent, persistence, sibyl_memory, x402_payment).
@@ -28,13 +35,6 @@ from typing import Any
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-
-# Load .env so VENDOR_URL / X402_ENABLED etc. are available to agent.py
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
 
 # Re-read env so VENDOR_URL / X402_ENABLED are defined for the proxy endpoints
 # below (these run in uvicorn workers that don't import agent.py).
@@ -60,6 +60,13 @@ app = FastAPI(
     description="FastAPI bridge exposing HaggleMind agent + on-chain proof endpoints to the React frontend",
     version="2.0.0",
 )
+
+
+@app.on_event("startup")
+def _startup_log() -> None:
+    print(f"[api] X402_ENABLED={os.environ.get('X402_ENABLED', 'not set')}")
+    print(f"[api] VENDOR_URL={os.environ.get('VENDOR_URL', 'not set')}")
+    print(f"[api] DB_PATH={os.environ.get('HAGGLEMIND_DB', 'hagglemind.db')}")
 
 # ---------------------------------------------------------------------------
 # CORS — allow the Vite dev server (port 5173) and any localhost origin
