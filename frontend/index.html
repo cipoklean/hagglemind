@@ -291,7 +291,14 @@ let proofs = {};
 
 // ── Helpers ──
 function isRealHash(h) { return typeof h === 'string' && h.startsWith('0x') && h.length === 66; }
-function fmtTs(ts) { if (!ts) return '—'; try { return new Date(ts).toLocaleString(); } catch { return ts; } }
+function fmtTs(ts) {
+  if (!ts) return '—';
+  try {
+    const d = new Date(ts);
+    // Use toLocaleString with UTC offset info for clarity
+    return d.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return ts; }
+}
 function num(n) { return String(n).padStart(2,'0'); }
 function cap(s) { return s.toUpperCase(); }
 
@@ -643,16 +650,7 @@ async function fetchNewLogs() {
       const terminal = document.getElementById('terminal-body');
       if (terminal) {
         terminal.innerHTML = '';
-        // Show agent logs (summary lines)
-        agentLogs.slice(-20).forEach(log => {
-          appendLogLine({
-            vendor: log.vendor,
-            step_type: 'result',
-            message: `${log.original_amt ? '$' + log.original_amt + ' → $' + log.final_amt + ' ' : ''}${log.message || ''}`,
-            timestamp: log.timestamp
-          });
-        });
-        // Show action steps (detailed)
+        // Show action steps in chronological order (oldest first)
         steps.forEach(step => {
           appendLogLine({
             vendor: step.vendor,
@@ -661,8 +659,26 @@ async function fetchNewLogs() {
             timestamp: step.timestamp
           });
         });
+        // Add divider and recent settlement results
+        if (agentLogs.length > 0) {
+          appendLogLine({
+            vendor: '',
+            step_type: 'INFO',
+            message: `── Recent settlements (${agentLogs.length} shown) ──`,
+            timestamp: new Date().toISOString()
+          });
+          agentLogs.slice(-10).forEach(log => {
+            appendLogLine({
+              vendor: log.vendor,
+              step_type: 'RESULT',
+              message: `${log.original_amt ? '$' + log.original_amt : '?'} → $${log.final_amt} ${log.savings > 0 ? '(saved $' + log.savings + ')' : '(no save)'} — ${log.payment_mode}`,
+              timestamp: log.timestamp
+            });
+          });
+        }
       }
       lastLogCount = steps.length;
+      autoScrollTerminal();
     } else if (steps.length > lastLogCount) {
       // New steps arrived — append only the new ones
       const terminal = document.getElementById('terminal-body');
@@ -688,7 +704,7 @@ function appendLogLine(data) {
   const terminal = document.getElementById('terminal-body');
   if (!terminal) return;
 
-  const ts = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+  const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' }) : new Date().toLocaleTimeString();
   const tag = data.step_type?.toUpperCase() || 'LOG';
   const vendorTag = data.vendor ? `<span class="terminal-vendor">[${data.vendor}]</span>` : '';
   const message = data.message || '';
