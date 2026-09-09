@@ -277,7 +277,8 @@ tailwind.config = {
 </div>
 
 <script>
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const VENDOR_URL = import.meta.env.VITE_VENDOR_URL || 'http://localhost:8777';
 const VENDORS = ['Comcast', 'Netflix', 'Spotify', 'DisneyPlus'];
 let steps = [];
 let pollTimer = null;

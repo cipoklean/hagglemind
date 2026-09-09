@@ -29,6 +29,10 @@ This is the proof that memory matters:
 Delete the memory, lose $48. The memory is load-bearing.
 
 ---
+# 1. Install dependencies
+pip install -r requirements.txt
+
+cd frontend && npm install && cd ..
 
 ## Quickstart
 

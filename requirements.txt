@@ -1,20 +1,14 @@
-# HaggleMind — Sibyl Labs Hackathon Submission
-# Requirements: Python 3.11+, pip
-
 # Core
 requests>=2.31.0
 
-# Sibyl Memory SDK (REQUIRED — load-bearing memory layer)
-# The REAL Sibyl Memory: SQLite + FTS5, five-tier schema.
-# All store/recall/update goes through this SDK. No JSON file access.
+# Sibyl Memory SDK
 sibyl-memory-client>=0.8.0
 
-# x402 Payment SDK — real on-chain Base Sepolia payments
-# pip install "x402[evm]" web3
+# x402 Payment SDK
 x402>=2.0
 web3>=8.0.0
 
-# Install all:
-#   pip install -r requirements.txt
-# Or individually:
-#   pip install sibyl-memory-client "x402[evm]" web3 requests
+# FastAPI Backend
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+python-multipart>=0.0.6
