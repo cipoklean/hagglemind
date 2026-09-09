@@ -462,8 +462,8 @@ class VendorHandler(BaseHTTPRequestHandler):
 
 def run_server(port=PORT):
     load_rules()
-    server = HTTPServer(("localhost", port), VendorHandler)
-    print(f"[vendor] Mock Vendor API running on http://localhost:{port}")
+    server = HTTPServer(("0.0.0.0", port), VendorHandler)
+    print(f"[vendor] Mock Vendor API running on http://0.0.0.0:{port}")
     print(f"[vendor] Endpoints: POST /inject_invoice, POST /negotiate, POST /pay, POST /pay-x402, POST /chaos, GET /invoice, GET /rules, GET /health")
     print(f"[vendor] x402: /pay-x402 is {'ENABLED' if X402_ENABLED else 'disabled (returns direct payment)'}")
     print(f"[vendor] Press Ctrl+C to stop.")
