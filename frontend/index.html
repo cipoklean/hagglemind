@@ -650,51 +650,71 @@ async function fetchNewLogs() {
       const terminal = document.getElementById('terminal-body');
       if (terminal) {
         terminal.innerHTML = '';
-        // Reverse steps for chronological order (oldest first)
-        const sortedSteps = [...steps].reverse();
-        sortedSteps.forEach(step => {
-          appendLogLine({
-            vendor: step.vendor,
-            step_type: step.step_type || 'log',
-            message: step.message || '',
-            timestamp: step.timestamp
-          });
+
+        // Merge all events and sort by timestamp (oldest first)
+        const actionEvents = steps.map(s => ({
+          vendor: s.vendor,
+          step_type: (s.step_type || 'log').toUpperCase(),
+          message: s.message || '',
+          timestamp: s.timestamp
+        }));
+
+        const settlementEvents = agentLogs.map(log => ({
+          vendor: log.vendor,
+          step_type: 'SETTLEMENT',
+          message: `${log.original_amt ? '$' + log.original_amt : '?'} → $${log.final_amt} ${log.savings > 0 ? '(saved $' + log.savings.toFixed(2) + ')' : '(no save)'} — ${log.payment_mode}`,
+          timestamp: log.timestamp
+        }));
+
+        // Combine and sort by timestamp (ascending = oldest first)
+        const allEvents = [...actionEvents, ...settlementEvents]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        // Display in chronological order
+        allEvents.forEach(event => {
+          appendLogLine(event);
         });
-        // Add divider and recent settlement results (newest first)
-        if (agentLogs.length > 0) {
-          appendLogLine({
-            vendor: '',
-            step_type: 'INFO',
-            message: `── Recent settlements (${agentLogs.length} shown) ──`,
-            timestamp: new Date().toISOString()
-          });
-          // agentLogs are already newest-first from backend
-          agentLogs.slice(-10).forEach(log => {
-            appendLogLine({
-              vendor: log.vendor,
-              step_type: 'RESULT',
-              message: `${log.original_amt ? '$' + log.original_amt : '?'} → $${log.final_amt} ${log.savings > 0 ? '(saved $' + log.savings + ')' : '(no save)'} — ${log.payment_mode}`,
-              timestamp: log.timestamp
-            });
-          });
-        }
       }
-      lastLogCount = steps.length;
+      lastLogCount = steps.length + agentLogs.length;
       autoScrollTerminal();
-    } else if (steps.length > lastLogCount) {
-      // New steps arrived — append only the new ones (reversed for chronological order)
+    } else if (steps.length + agentLogs.length > lastLogCount) {
+      // New events arrived — collect and sort by timestamp
       const terminal = document.getElementById('terminal-body');
-      if (terminal && steps.length > lastLogCount) {
-        const newSteps = steps.slice(lastLogCount).reverse();
-        for (let i = 0; i < newSteps.length; i++) {
-          appendLogLine({
-            vendor: newSteps[i].vendor,
-            step_type: newSteps[i].step_type || 'log',
-            message: newSteps[i].message || '',
-            timestamp: newSteps[i].timestamp
-          });
-        }
-        lastLogCount = steps.length;
+      if (terminal) {
+        // Get only new steps
+        const newSteps = steps.slice(lastLogCount < steps.length ? lastLogCount : 0);
+
+        // Calculate how many agent logs are new
+        const prevAgentCount = lastLogCount - steps.length;
+        const currentAgentCount = agentLogs.length;
+        const newAgentStart = Math.max(0, currentAgentCount - prevAgentCount - (lastLogCount - steps.length - newSteps.length));
+        const newAgents = agentLogs.slice(newAgentStart);
+
+        // Convert to event format
+        const actionEvents = newSteps.map(s => ({
+          vendor: s.vendor,
+          step_type: (s.step_type || 'log').toUpperCase(),
+          message: s.message || '',
+          timestamp: s.timestamp
+        }));
+
+        const settlementEvents = newAgents.map(log => ({
+          vendor: log.vendor,
+          step_type: 'SETTLEMENT',
+          message: `${log.original_amt ? '$' + log.original_amt : '?'} → $${log.final_amt} ${log.savings > 0 ? '(saved $' + log.savings.toFixed(2) + ')' : '(no save)'} — ${log.payment_mode}`,
+          timestamp: log.timestamp
+        }));
+
+        // Sort new events by timestamp
+        const newEvents = [...actionEvents, ...settlementEvents]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        // Append in chronological order
+        newEvents.forEach(event => {
+          appendLogLine(event);
+        });
+
+        lastLogCount = steps.length + agentLogs.length;
         autoScrollTerminal();
       }
     }
