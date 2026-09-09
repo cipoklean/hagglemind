@@ -29,10 +29,13 @@ This is the proof that memory matters:
 Delete the memory, lose $48. The memory is load-bearing.
 
 ---
-# 1. Install dependencies
-pip install -r requirements.txt
 
+## Setup
+
+```bash
+pip install -r requirements.txt
 cd frontend && npm install && cd ..
+```
 
 ## Quickstart
 
@@ -132,7 +135,7 @@ hagglemind/
 ├── haggle_cli.py          # CLI for time-machine simulation
 ├── deletion_test.py       # Automated deletion test
 ├── api.py                 # FastAPI backend (port 8000)
-├── frontend/              # React frontend (port 5173)
+├── frontend/              # Vanilla JS frontend (port 5173)
 │   └── index.html         # Single-file editorial UI
 └── requirements.txt
 ```
