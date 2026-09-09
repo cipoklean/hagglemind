@@ -444,10 +444,13 @@ async function runAgent() {
   status.className = 'run-status';
   steps = [];
 
-  // Clear terminal and show connecting message
+  // Clear terminal while running
+  const terminal = document.getElementById('terminal-body');
   if (terminal) {
-    terminal.innerHTML = '<div class="terminal-line"><span class="terminal-ts">--:--:--</span><span class="terminal-tag">SSE</span><span class="terminal-msg">Connecting to live stream...</span></div>';
+    terminal.innerHTML = '<div class="terminal-line"><span class="terminal-ts">--:--:--</span><span class="terminal-tag">RUN</span><span class="terminal-msg">Negotiating...</span></div>';
   }
+  // Reset polling counter so next fetch populates terminal
+  lastLogCount = 0;
   
   // Inject first
   try {
@@ -479,6 +482,9 @@ async function runAgent() {
     btn.disabled = false;
     btn.textContent = 'Run negotiation agent';
     status.textContent = '';
+    // Refresh terminal one more time to show final results
+    lastLogCount = 0;
+    fetchNewLogs();
   } catch (e) {
     clearTimeout(tm);
     if (e.name === 'AbortError') {
