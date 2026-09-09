@@ -95,6 +95,27 @@ tailwind.config = {
   
   /* Body text bump */
   body { font-size: 17px; }
+
+  /* Section 04 proof cards */
+  .proof-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .proof-card { background: var(--paper-deep); border: 1px solid rgba(28,25,23,0.35); border-radius: 8px; padding: 20px; }
+  .proof-card-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--ink-soft); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; }
+  .proof-card-title { font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; color: var(--ink); margin: 0 0 10px 0; }
+  .proof-stat { font-family: 'IBM Plex Mono', monospace; font-size: 28px; font-weight: 600; color: var(--accent); margin: 0; line-height: 1; }
+  .proof-desc { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); margin-top: 8px; line-height: 1.5; }
+  .proof-caption { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-top: 16px; font-style: italic; }
+
+  /* Section 05 primitives strip */
+  .primitives-strip { display: flex; gap: 24px; flex-wrap: wrap; }
+  .primitive-item { display: flex; flex-direction: column; gap: 4px; }
+  .primitive-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--ink-soft); letter-spacing: 0.12em; text-transform: uppercase; }
+  .primitive-value { font-family: 'Fraunces', serif; font-size: 16px; color: var(--ink); }
+
+  /* Section 06 stats strip */
+  .stats-strip { display: flex; gap: 20px; flex-wrap: wrap; }
+  .stat-item { display: flex; align-items: center; gap: 8px; }
+  .stat-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--verified); }
+  .stat-text { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft); }
   
   /* Run button */
   .run-pill { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--paper-deep); background: var(--verified); border: none; padding: 9px 18px; border-radius: 999px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -258,6 +279,86 @@ tailwind.config = {
       <div id="settlement-body" class="flex flex-col gap-3">
         <button id="history-toggle" class="history-toggle hidden" onclick="toggleHistory()">show full history</button>
         <div id="tx-table" class="tx-table"></div>
+      </div>
+    </section>
+
+    <!-- Section 04: Load-bearing proof -->
+    <section class="section">
+      <hr class="hairline mb-10" />
+      <div class="flex items-baseline gap-2 mb-10 pb-8">
+        <span class="section-num">04 /</span>
+        <h2 class="section-title">The load-bearing proof.</h2>
+      </div>
+      <div class="proof-grid">
+        <div class="proof-card">
+          <div class="proof-card-label">Memory intact</div>
+          <h3 class="proof-card-title">$72 saved · 40% discount</h3>
+          <p class="proof-stat">$72</p>
+          <p class="proof-desc">Tactic: competitor_promo<br>Confidence: 0.95<br>Sibyl Memory guided the negotiation.</p>
+        </div>
+        <div class="proof-card">
+          <div class="proof-card-label">After deletion test</div>
+          <h3 class="proof-card-title">$120 · full price</h3>
+          <p class="proof-stat">$120</p>
+          <p class="proof-desc">Tactic: loyalty_discount (default)<br>Confidence: 0.00<br>No memory — agent forgot what works.</p>
+        </div>
+      </div>
+      <p class="proof-caption">Same invoice. Same vendor. Same agent. The only difference is whether Sibyl Memory exists.</p>
+    </section>
+
+    <!-- Section 05: Primitives -->
+    <section class="section">
+      <hr class="hairline mb-10" />
+      <div class="flex items-baseline gap-2 mb-10 pb-8">
+        <span class="section-num">05 /</span>
+        <h2 class="section-title">Architecture.</h2>
+      </div>
+      <div class="primitives-strip">
+        <div class="primitive-item">
+          <span class="primitive-label">Section 01</span>
+          <span class="primitive-value">entities · recall · reflection</span>
+        </div>
+        <div class="primitive-item">
+          <span class="primitive-label">Section 02</span>
+          <span class="primitive-value">recall → decision · confidence rewrite</span>
+        </div>
+        <div class="primitive-item">
+          <span class="primitive-label">Section 03</span>
+          <span class="primitive-value">on-chain settlement · independent verification</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 06: Stats -->
+    <section class="section">
+      <hr class="hairline mb-10" />
+      <div class="flex items-baseline gap-2 mb-10 pb-8">
+        <span class="section-num">06 /</span>
+        <h2 class="section-title">Verifiable, not vibes.</h2>
+      </div>
+      <div class="stats-strip">
+        <div class="stat-item">
+          <span class="stat-dot"></span>
+          <span class="stat-text">39 commits · git log verified</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-dot"></span>
+          <span class="stat-text">8 on-chain x402 settlements</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-dot"></span>
+          <span class="stat-text">$48 swing on one memory wipe</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-dot"></span>
+          <span class="stat-text">3 deterministic gates (deletion · fresh-session · chaos)</span>
+        </div>
+      </div>
+      <div style="margin-top: 24px; padding: 16px; background: var(--ink); border-radius: 8px; border: 1px solid var(--gold);">
+        <div class="terminal-line">
+          <span class="terminal-tag">QUICKSTART</span>
+          <span class="terminal-msg" style="color: var(--paper-deep);">1. inject $X invoice → 2. run agent → 3. verify on Base Sepolia</span>
+        </div>
       </div>
     </section>
   </main>
