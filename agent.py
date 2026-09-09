@@ -205,8 +205,10 @@ def negotiate_bill(vendor: str) -> dict:
     pay_result = pay_vendor(vendor, final_amount)
     mode = pay_result.get("mode", "?")
     tx_info = pay_result.get("tx_hash", pay_result.get("error", ""))
-    print(f"[agent] Payment: {mode} — {tx_info}")
-    _log_step(vendor, 8, "payment", f"Payment: {mode} — {tx_info}")
+    reason = pay_result.get("reason", "")
+    reason_str = f" (Reason: {reason})" if reason else ""
+    print(f"[agent] Payment: {mode} — {tx_info}{reason_str}")
+    _log_step(vendor, 8, "payment", f"Payment: {mode} — {tx_info}{reason_str}")
 
     # Step 5: Update Sibyl Memory (self-modifying via SDK)
     confidence_after = mem.update_after_negotiation(vendor, tactic, accepted)
