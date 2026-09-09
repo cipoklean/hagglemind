@@ -434,15 +434,20 @@ function renderTerminal() {
 async function runAgent() {
   const btn = document.getElementById('run-btn');
   const status = document.getElementById('run-status');
+  const terminal = document.getElementById('terminal-body');
   const vendor = document.getElementById('vendor-select').value;
   const amount = parseFloat(document.getElementById('amount-input').value) || 1.0;
-  
+
   btn.disabled = true;
   btn.textContent = 'Run in progress…';
   status.textContent = '';
   status.className = 'run-status';
   steps = [];
-  renderTerminal();
+
+  // Clear terminal and show connecting message
+  if (terminal) {
+    terminal.innerHTML = '<div class="terminal-line"><span class="terminal-ts">--:--:--</span><span class="terminal-tag">SSE</span><span class="terminal-msg">Connecting to live stream...</span></div>';
+  }
   
   // Inject first
   try {
@@ -618,6 +623,18 @@ function connectSSE() {
 
   eventSource.onopen = () => {
     console.log('[SSE] Connected');
+    // Load existing logs into terminal on first connect
+    fetch(`${API}/api/logs?limit=20`).then(r => r.json()).then(d => {
+      const logs = d.agent_logs || [];
+      if (logs.length && !document.getElementById('terminal-body').children.length) {
+        logs.forEach(l => appendLogLine({
+          vendor: l.vendor,
+          step_type: l.step_type || 'log',
+          message: l.message || '',
+          timestamp: l.timestamp
+        }));
+      }
+    }).catch(() => {});
   };
 
   eventSource.addEventListener('log', (e) => {
@@ -683,6 +700,9 @@ connectSSE();  // Use SSE instead of polling
 refreshTx();
 checkHealth();
 setInterval(checkHealth, 10000);
+// Auto-refresh transactions and memory every 30s
+setInterval(refreshTx, 30000);
+setInterval(refreshMemory, 30000);
 </script>
 </body>
 </html>
