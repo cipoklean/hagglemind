@@ -175,7 +175,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
     Falls back to mock vendor API (/pay) if the vendor doesn't return 402.
     """
     if not X402_ENABLED:
-        return _execute_fallback_payment(vendor, amount_usd)
+        return _execute_fallback_payment(vendor, amount_usd, "X402_ENABLED=false")
 
     if not PRIVATE_KEY:
         return {
@@ -242,7 +242,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
         print(f"[x402] Response: HTTP {r.status_code}")
     except requests.RequestException as e:
         print(f"[x402] Request failed: {e}")
-        return _execute_fallback_payment(vendor, amount_usd)
+        return _execute_fallback_payment(vendor, amount_usd, f"Request failed: {e}")
 
     # --- Step 2: If no 402, vendor accepted directly ---
     if r.status_code == 200:
@@ -263,7 +263,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
 
     if r.status_code != 402:
         print(f"[x402] Unexpected status {r.status_code} — falling back to direct /pay")
-        return _execute_fallback_payment(vendor, amount_usd)
+        return _execute_fallback_payment(vendor, amount_usd, f"Unexpected HTTP {r.status_code}")
 
     # --- Step 3: Parse PAYMENT-REQUIRED ---
     print(f"\n[x402] Step 2: Parsing PAYMENT-REQUIRED header...")
@@ -301,7 +301,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
             print(f"[x402] ERROR decoding PAYMENT-REQUIRED (base64/json): {e}")
             print(f"[x402] Raw header: {pr_header[:100]}")
             print(f"[x402] WARN: parse failure — falling back to direct /pay")
-            return _execute_fallback_payment(vendor, amount_usd)
+            return _execute_fallback_payment(vendor, amount_usd, f"PAYMENT-REQUIRED decode error: {e}")
         pr_header = _normalize_payment_required(decoded)
 
     try:
@@ -343,7 +343,7 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
     except Exception as e:
         print(f"[x402] ERROR parsing PaymentRequired: {e}")
         print(f"[x402] WARN: parse failure — falling back to direct /pay")
-        return _execute_fallback_payment(vendor, amount_usd)
+        return _execute_fallback_payment(vendor, amount_usd, f"PaymentRequired parse error: {e}")
 
     # --- Step 4: Create PaymentPayload ---
     print(f"\n[x402] Step 3: Creating PaymentPayload via x402ClientSync.create_payment_payload...")
@@ -550,16 +550,19 @@ def execute_x402_payment(vendor: str, amount_usd: float) -> dict:
         import traceback
         traceback.print_exc()
         print("[x402] Falling back to vendor-only payment (no on-chain tx)")
-        return _execute_fallback_payment(vendor, amount_usd)
+        return _execute_fallback_payment(vendor, amount_usd, f"On-chain broadcast failed: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Fallback payment — direct /pay endpoint when x402 isn't available
 # ---------------------------------------------------------------------------
 
-def _execute_fallback_payment(vendor: str, amount: float) -> dict:
+def _execute_fallback_payment(vendor: str, amount: float, reason: str = "") -> dict:
     """Pay via mock vendor's /pay endpoint (no on-chain tx)."""
-    print(f"\n[x402] Falling back to direct /pay endpoint")
+    if reason:
+        print(f"\n[x402] Falling back to direct /pay endpoint (Reason: {reason})")
+    else:
+        print(f"\n[x402] Falling back to direct /pay endpoint")
     try:
         r = requests.post(
             f"{VENDOR_URL}/pay",
@@ -569,6 +572,8 @@ def _execute_fallback_payment(vendor: str, amount: float) -> dict:
         if r.status_code == 200:
             result = r.json()
             result["mode"] = "direct_api"
+            if reason:
+                result["reason"] = reason
             # Dashboard persistence — record the simulated/direct tx
             _log_tx_to_dashboard({
                 "vendor": vendor,
@@ -580,7 +585,9 @@ def _execute_fallback_payment(vendor: str, amount: float) -> dict:
                 "status": "confirmed",
             })
             return result
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        if not reason:
+            reason = str(exc)
         pass
 
     fallback = {

@@ -602,9 +602,73 @@ async function checkHealth() {
   }
 }
 
+// ── SSE Real-time Streaming ──
+let eventSource = null;
+
+function connectSSE() {
+  const terminal = document.getElementById('terminal-body');
+  if (!terminal) return;
+
+  // Close existing connection
+  if (eventSource) {
+    eventSource.close();
+  }
+
+  eventSource = new EventSource(`${API}/api/stream`);
+
+  eventSource.onopen = () => {
+    console.log('[SSE] Connected');
+  };
+
+  eventSource.addEventListener('log', (e) => {
+    const data = JSON.parse(e.data);
+    appendLogLine(data);
+    autoScrollTerminal();
+  });
+
+  eventSource.onerror = (err) => {
+    console.log('[SSE] Connection lost, reconnecting...');
+    eventSource.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+function appendLogLine(data) {
+  const terminal = document.getElementById('terminal-body');
+  if (!terminal) return;
+
+  const ts = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+  const tag = data.step_type?.toUpperCase() || 'LOG';
+  const vendorTag = data.vendor ? `<span class="terminal-vendor">[${data.vendor}]</span>` : '';
+  const message = data.message || '';
+
+  const line = document.createElement('div');
+  line.className = 'terminal-line';
+  line.innerHTML = `
+    <span class="terminal-ts">${ts}</span>
+    <span class="terminal-tag">${tag}</span>
+    ${vendorTag}
+    <span class="terminal-msg">${message}</span>
+  `;
+
+  terminal.appendChild(line);
+
+  // Keep only last 200 lines
+  while (terminal.children.length > 200) {
+    terminal.removeChild(terminal.firstChild);
+  }
+}
+
+function autoScrollTerminal() {
+  const terminal = document.getElementById('terminal-body');
+  if (terminal) {
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+}
+
 // ── Init ──
 refreshMemory();
-pollTimer = setInterval(pollLogs, 1500);
+connectSSE();  // Use SSE instead of polling
 refreshTx();
 checkHealth();
 setInterval(checkHealth, 10000);

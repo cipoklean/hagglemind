@@ -55,6 +55,8 @@ import sibyl_memory  # noqa: E402  # SDK-backed memory wrapper
 
 # agent is imported lazily inside /api/run so startup is fast.
 
+from fastapi.responses import StreamingResponse
+
 app = FastAPI(
     title="HaggleMind Backend Bridge",
     description="FastAPI bridge exposing HaggleMind agent + on-chain proof endpoints to the React frontend",
@@ -430,6 +432,75 @@ def verify_on_chain(tx_hash: str) -> ChainProofResponse:
             network="Base Sepolia",
             error=f"RPC error: {exc}",
         )
+
+
+# ===========================================================================
+# /api/stream — Server-Sent Events for real-time log streaming
+# ===========================================================================
+
+import threading
+import time
+
+_event_listeners: list = []
+_event_lock = threading.Lock()
+
+
+def _broadcast_event(event_data: dict) -> None:
+    """Send an event to all connected SSE clients."""
+    import json
+    data = json.dumps(event_data)
+    with _event_lock:
+        dead = []
+        for q in _event_listeners:
+            try:
+                q.put_nowait(data)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            _event_listeners.remove(q)
+
+
+def _sse_generator(event_queue: list) -> any:
+    """Yield SSE events until the queue is closed."""
+    yield "data: {\"type\":\"open\"}\n\n"
+    while True:
+        try:
+            data = event_queue.get(timeout=30)
+            if data is None:  # sentinel for close
+                break
+            yield f"data: {data}\n\n"
+        except Exception:
+            # Queue empty or timed out — send keepalive
+            yield ": ping\n\n"
+
+
+@app.get("/api/stream")
+async def stream_logs():
+    """SSE endpoint for real-time agent log streaming."""
+    import queue
+
+    q: queue.Queue = queue.Queue()
+    with _event_lock:
+        _event_listeners.append(q)
+
+    async def event_stream():
+        try:
+            async for chunk in _sse_generator(q):
+                yield chunk
+        finally:
+            with _event_lock:
+                if q in _event_listeners:
+                    _event_listeners.remove(q)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ===========================================================================

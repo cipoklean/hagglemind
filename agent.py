@@ -64,6 +64,18 @@ def _log_step(vendor: str, step_num: int, step_type: str, message: str) -> None:
             "step_type": step_type,
             "message": message,
         })
+        # Broadcast to SSE listeners for real-time updates
+        try:
+            from api import _broadcast_event
+            _broadcast_event({
+                "type": "log",
+                "vendor": vendor,
+                "step": step_num,
+                "step_type": step_type,
+                "message": message,
+            })
+        except Exception:
+            pass  # best-effort; never break the CLI
     except Exception:
         pass  # best-effort; never break the CLI
 
