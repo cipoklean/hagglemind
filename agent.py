@@ -66,8 +66,8 @@ def _log_step(vendor: str, step_num: int, step_type: str, message: str) -> None:
         })
         # Broadcast to SSE listeners for real-time updates
         try:
-            from api import _broadcast_event
-            _broadcast_event({
+            import sse_broadcaster
+            sse_broadcaster.broadcast({
                 "type": "log",
                 "vendor": vendor,
                 "step": step_num,

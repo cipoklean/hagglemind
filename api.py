@@ -441,35 +441,17 @@ def verify_on_chain(tx_hash: str) -> ChainProofResponse:
 import threading
 import time
 
-_event_listeners: list = []
-_event_lock = threading.Lock()
-
-
-def _broadcast_event(event_data: dict) -> None:
-    """Send an event to all connected SSE clients."""
-    import json
-    data = json.dumps(event_data)
-    with _event_lock:
-        dead = []
-        for q in _event_listeners:
-            try:
-                q.put_nowait(data)
-            except Exception:
-                dead.append(q)
-        for q in dead:
-            _event_listeners.remove(q)
+# Import SSE broadcaster
+import sse_broadcaster as sse
 
 
 @app.get("/api/stream")
 async def stream_logs():
     """SSE endpoint for real-time agent log streaming."""
     import asyncio
-    import queue
     import json
 
-    q: queue.Queue = queue.Queue()
-    with _event_lock:
-        _event_listeners.append(q)
+    q = sse.get_queue()
 
     async def event_stream():
         try:
@@ -484,7 +466,7 @@ async def stream_logs():
                     )
                     if data is None:  # sentinel for close
                         break
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"data: {data}\n\n"
                 except asyncio.TimeoutError:
                     # Send keepalive comment
                     yield ": ping\n\n"
@@ -492,9 +474,7 @@ async def stream_logs():
                     print(f"[sse] Error in stream: {e}")
                     break
         finally:
-            with _event_lock:
-                if q in _event_listeners:
-                    _event_listeners.remove(q)
+            sse.remove_queue(q)
 
     return StreamingResponse(
         event_stream(),
