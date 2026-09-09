@@ -607,58 +607,77 @@ async function checkHealth() {
   }
 }
 
-// ── SSE Real-time Streaming ──
-let eventSource = null;
+// ── Live Terminal (Long Polling) ──
+let lastLogCount = 0;
+let pollTimer = null;
 
-function connectSSE() {
-  const terminal = document.getElementById('terminal-body');
-  if (!terminal) return;
+function startPolling() {
+  // Cancel any existing poll
+  if (pollTimer) clearInterval(pollTimer);
+  lastLogCount = 0;
+  pollTimer = setInterval(fetchNewLogs, 500);
+  fetchNewLogs(); // Immediate first fetch
+}
 
-  // Close existing connection
-  if (eventSource) {
-    eventSource.close();
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
+}
 
-  eventSource = new EventSource(`${API}/api/stream`);
+async function fetchNewLogs() {
+  try {
+    const r = await fetch(`${API}/api/logs?limit=50`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const steps = d.action_steps || [];
+    const agentLogs = d.agent_logs || [];
 
-  eventSource.onopen = () => {
-    console.log('[SSE] Connected');
-    // Load existing logs into terminal on first connect
-    fetch(`${API}/api/logs?limit=20`).then(r => r.json()).then(d => {
-      const logs = d.agent_logs || [];
-      if (logs.length && !document.getElementById('terminal-body').children.length) {
-        logs.forEach(l => appendLogLine({
-          vendor: l.vendor,
-          step_type: l.step_type || 'log',
-          message: l.message || '',
-          timestamp: l.timestamp
-        }));
+    // Show history on first load or when terminal is empty
+    if (lastLogCount === 0 && (steps.length > 0 || agentLogs.length > 0)) {
+      const terminal = document.getElementById('terminal-body');
+      if (terminal) {
+        terminal.innerHTML = '';
+        // Show agent logs (summary lines)
+        agentLogs.slice(-20).forEach(log => {
+          appendLogLine({
+            vendor: log.vendor,
+            step_type: 'result',
+            message: `${log.original_amt ? '$' + log.original_amt + ' → $' + log.final_amt + ' ' : ''}${log.message || ''}`,
+            timestamp: log.timestamp
+          });
+        });
+        // Show action steps (detailed)
+        steps.forEach(step => {
+          appendLogLine({
+            vendor: step.vendor,
+            step_type: step.step_type || 'log',
+            message: step.message || '',
+            timestamp: step.timestamp
+          });
+        });
       }
-    }).catch(() => {});
-  };
-
-  eventSource.addEventListener('log', (e) => {
-    const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
-    appendLogLine(data);
-    autoScrollTerminal();
-  });
-
-  // Fallback: some browsers/proxies deliver unnamed data events
-  eventSource.addEventListener('message', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      if (data && (data.step !== undefined || data.vendor)) {
-        appendLogLine(data);
+      lastLogCount = steps.length;
+    } else if (steps.length > lastLogCount) {
+      // New steps arrived — append only the new ones
+      const terminal = document.getElementById('terminal-body');
+      if (terminal && steps.length > lastLogCount) {
+        for (let i = lastLogCount; i < steps.length; i++) {
+          appendLogLine({
+            vendor: steps[i].vendor,
+            step_type: steps[i].step_type || 'log',
+            message: steps[i].message || '',
+            timestamp: steps[i].timestamp
+          });
+        }
+        lastLogCount = steps.length;
         autoScrollTerminal();
       }
-    } catch {}
-  });
-
-  eventSource.onerror = (err) => {
-    console.log('[SSE] Connection lost, reconnecting...');
-    eventSource.close();
-    setTimeout(connectSSE, 3000);
-  };
+    }
+  } catch (e) {
+    console.error('Poll error:', e);
+  }
 }
 
 function appendLogLine(data) {
@@ -696,7 +715,7 @@ function autoScrollTerminal() {
 
 // ── Init ──
 refreshMemory();
-connectSSE();  // Use SSE instead of polling
+startPolling();  // Use long-polling instead of SSE for reliability
 refreshTx();
 checkHealth();
 setInterval(checkHealth, 10000);
