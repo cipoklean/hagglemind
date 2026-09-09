@@ -278,7 +278,7 @@ tailwind.config = {
 
 <script>
 // Use relative paths so Nginx can proxy /api/* to backend
-const API = '/api';
+const API = '';  // empty — calls are like fetch('/api/logs')
 const VENDOR_URL = '/vendor';
 const VENDORS = ['Comcast', 'Netflix', 'Spotify', 'DisneyPlus'];
 let steps = [];
