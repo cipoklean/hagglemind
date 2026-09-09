@@ -456,7 +456,7 @@ async def stream_logs():
     async def event_stream():
         try:
             # Send open event
-            yield "data: {\"type\":\"open\"}\n\n"
+            yield "event: log\ndata: {\"type\":\"open\"}\n\n"
             while True:
                 try:
                     # Wait for event with timeout
@@ -466,7 +466,7 @@ async def stream_logs():
                     )
                     if data is None:  # sentinel for close
                         break
-                    yield f"data: {data}\n\n"
+                    yield f"event: log\ndata: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
                     # Send keepalive comment
                     yield ": ping\n\n"

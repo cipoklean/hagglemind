@@ -621,9 +621,20 @@ function connectSSE() {
   };
 
   eventSource.addEventListener('log', (e) => {
-    const data = JSON.parse(e.data);
+    const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
     appendLogLine(data);
     autoScrollTerminal();
+  });
+
+  // Fallback: some browsers/proxies deliver unnamed data events
+  eventSource.addEventListener('message', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data && (data.step !== undefined || data.vendor)) {
+        appendLogLine(data);
+        autoScrollTerminal();
+      }
+    } catch {}
   });
 
   eventSource.onerror = (err) => {
