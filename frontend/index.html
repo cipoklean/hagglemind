@@ -650,8 +650,9 @@ async function fetchNewLogs() {
       const terminal = document.getElementById('terminal-body');
       if (terminal) {
         terminal.innerHTML = '';
-        // Show action steps in chronological order (oldest first)
-        steps.forEach(step => {
+        // Reverse steps for chronological order (oldest first)
+        const sortedSteps = [...steps].reverse();
+        sortedSteps.forEach(step => {
           appendLogLine({
             vendor: step.vendor,
             step_type: step.step_type || 'log',
@@ -659,7 +660,7 @@ async function fetchNewLogs() {
             timestamp: step.timestamp
           });
         });
-        // Add divider and recent settlement results
+        // Add divider and recent settlement results (newest first)
         if (agentLogs.length > 0) {
           appendLogLine({
             vendor: '',
@@ -667,6 +668,7 @@ async function fetchNewLogs() {
             message: `── Recent settlements (${agentLogs.length} shown) ──`,
             timestamp: new Date().toISOString()
           });
+          // agentLogs are already newest-first from backend
           agentLogs.slice(-10).forEach(log => {
             appendLogLine({
               vendor: log.vendor,
@@ -680,15 +682,16 @@ async function fetchNewLogs() {
       lastLogCount = steps.length;
       autoScrollTerminal();
     } else if (steps.length > lastLogCount) {
-      // New steps arrived — append only the new ones
+      // New steps arrived — append only the new ones (reversed for chronological order)
       const terminal = document.getElementById('terminal-body');
       if (terminal && steps.length > lastLogCount) {
-        for (let i = lastLogCount; i < steps.length; i++) {
+        const newSteps = steps.slice(lastLogCount).reverse();
+        for (let i = 0; i < newSteps.length; i++) {
           appendLogLine({
-            vendor: steps[i].vendor,
-            step_type: steps[i].step_type || 'log',
-            message: steps[i].message || '',
-            timestamp: steps[i].timestamp
+            vendor: newSteps[i].vendor,
+            step_type: newSteps[i].step_type || 'log',
+            message: newSteps[i].message || '',
+            timestamp: newSteps[i].timestamp
           });
         }
         lastLogCount = steps.length;
