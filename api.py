@@ -460,24 +460,12 @@ def _broadcast_event(event_data: dict) -> None:
             _event_listeners.remove(q)
 
 
-def _sse_generator(event_queue: list) -> any:
-    """Yield SSE events until the queue is closed."""
-    yield "data: {\"type\":\"open\"}\n\n"
-    while True:
-        try:
-            data = event_queue.get(timeout=30)
-            if data is None:  # sentinel for close
-                break
-            yield f"data: {data}\n\n"
-        except Exception:
-            # Queue empty or timed out — send keepalive
-            yield ": ping\n\n"
-
-
 @app.get("/api/stream")
 async def stream_logs():
     """SSE endpoint for real-time agent log streaming."""
+    import asyncio
     import queue
+    import json
 
     q: queue.Queue = queue.Queue()
     with _event_lock:
@@ -485,8 +473,24 @@ async def stream_logs():
 
     async def event_stream():
         try:
-            async for chunk in _sse_generator(q):
-                yield chunk
+            # Send open event
+            yield "data: {\"type\":\"open\"}\n\n"
+            while True:
+                try:
+                    # Wait for event with timeout
+                    data = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(None, q.get),
+                        timeout=30
+                    )
+                    if data is None:  # sentinel for close
+                        break
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment
+                    yield ": ping\n\n"
+                except Exception as e:
+                    print(f"[sse] Error in stream: {e}")
+                    break
         finally:
             with _event_lock:
                 if q in _event_listeners:
