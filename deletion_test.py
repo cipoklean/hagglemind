@@ -105,11 +105,11 @@ def wipe_and_seed_memory():
 
 
 def inject_test_invoice():
-    """Inject a $120 Comcast invoice."""
-    print("[setup] Injecting Comcast invoice for $120/month...")
+    """Inject a $9 Comcast invoice."""
+    print("[setup] Injecting Comcast invoice for $9.00/month...")
     result = vendor_api("POST", "/inject_invoice", json_data={
         "vendor": "Comcast",
-        "amount": 120.00,
+        "amount": 9.00,
     })
     if "error" in result:
         print(f"ERROR injecting invoice: {result['error']}")
@@ -160,7 +160,7 @@ def print_deletion_result(with_memory_result, without_memory_result):
         print(f"  [FAIL] Expected price without memory to be higher.")
 
     print()
-    print(f"  Expected values: WITH=$72.00 (40% discount), WITHOUT=$120.00 (no discount)")
+    print(f"  Expected values: WITH=$5.40 (40% discount), WITHOUT=$9.00 (no discount)")
     print(f"  Actual delta: ${with_price + without_price - original - without_price:.2f}")
 
 
