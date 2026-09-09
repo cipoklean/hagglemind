@@ -234,7 +234,7 @@ tailwind.config = {
           <span id="inject-result" class="inject-result"></span>
         </div>
         
-        <div id="terminal" class="terminal">
+        <div id="terminal-body" class="terminal">
           <div class="terminal-empty">Console idle: press Run to start</div>
         </div>
         
@@ -415,7 +415,7 @@ function typeColor(t) {
 }
 
 function renderTerminal() {
-  const term = document.getElementById('terminal');
+  const term = document.getElementById('terminal-body');
   if (!steps.length) {
     term.innerHTML = '<div class="terminal-empty">Console idle: press Run to start</div>';
     return;
