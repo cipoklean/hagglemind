@@ -445,7 +445,6 @@ async function runAgent() {
   steps = [];
 
   // Clear terminal while running
-  const terminal = document.getElementById('terminal-body');
   if (terminal) {
     terminal.innerHTML = '<div class="terminal-line"><span class="terminal-ts">--:--:--</span><span class="terminal-tag">RUN</span><span class="terminal-msg">Negotiating...</span></div>';
   }
