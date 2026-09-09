@@ -609,7 +609,6 @@ async function checkHealth() {
 
 // ── Live Terminal (Long Polling) ──
 let lastLogCount = 0;
-let pollTimer = null;
 
 function startPolling() {
   // Cancel any existing poll
@@ -722,6 +721,18 @@ setInterval(checkHealth, 10000);
 // Auto-refresh transactions and memory every 30s
 setInterval(refreshTx, 30000);
 setInterval(refreshMemory, 30000);
+
+// Debug: log that polling started
+console.log('[HaggleMind] Polling started, lastLogCount:', lastLogCount);
+setTimeout(() => {
+  const term = document.getElementById('terminal-body');
+  if (term && term.children.length === 0) {
+    console.warn('[HaggleMind] Terminal still empty after 2s — checking data...');
+    fetch(`${API}/api/logs?limit=5`).then(r => r.json()).then(d => {
+      console.log('[HaggleMind] API response:', d.action_steps?.length || 0, 'steps,', d.agent_logs?.length || 0, 'logs');
+    });
+  }
+}, 2000);
 </script>
 </body>
 </html>
