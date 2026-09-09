@@ -1,0 +1,17 @@
+[Unit]
+Description=HaggleMind Vendor Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/hagglemind
+ExecStart=/home/ubuntu/hagglemind/venv/bin/python vendor_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=/home/ubuntu/hagglemind/.env
+
+[Install]
+WantedBy=multi-user.target
