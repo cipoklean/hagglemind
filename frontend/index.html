@@ -126,6 +126,8 @@ tailwind.config = {
   
   /* Settlement table */
   .history-toggle { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--accent); background: none; border: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; letter-spacing: 0.04em; text-transform: uppercase; align-self: flex-start; }
+  .load-older { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); background: none; border: 1px solid var(--hairline); cursor: pointer; padding: 8px 16px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em; align-self: center; transition: all 0.2s; }
+  .load-older:hover { color: var(--ink); border-color: var(--ink); }
   .tx-table { display: flex; flex-direction: column; gap: 0; }
   .tx-row { display: grid; grid-template-columns: 1fr 120px 80px 140px 140px 100px 1fr; gap: 16px; align-items: center; padding: 14px 16px; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); background: var(--paper-deep); }
   .tx-row:hover { background: var(--paper); }
@@ -277,8 +279,8 @@ tailwind.config = {
         <h2 class="section-title">Proof, not promises.</h2>
       </div>
       <div id="settlement-body" class="flex flex-col gap-3">
-        <button id="history-toggle" class="history-toggle hidden" onclick="toggleHistory()">show full history</button>
         <div id="tx-table" class="tx-table"></div>
+        <button id="load-older-btn" class="load-older hidden" onclick="loadOlderTx()">load older transactions</button>
       </div>
     </section>
 
@@ -607,48 +609,65 @@ async function runAgent() {
 }
 
 // ── Settlement ──
+const PAGE_SIZE = 6;
+let txOffset = 0;
+let allTxs = [];  // accumulate all fetched transactions
+
 async function refreshTx() {
+  txOffset = 0;
+  allTxs = [];
+  proofs = {};
+  loadNextPage();
+}
+
+async function loadNextPage() {
   try {
-    const r = await fetch(`${API}/api/logs?limit=50`);
+    const r = await fetch(`${API}/api/logs?limit=${PAGE_SIZE}&offset=${txOffset}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
-    renderTransactions(d.transactions || []);
+    const freshTxs = d.transactions || [];
+    
+    if (freshTxs.length === 0) {
+      document.getElementById('load-older-btn').classList.add('hidden');
+      return;
+    }
+    
+    // Prepend to allTxs so newest stay at top
+    allTxs = [...freshTxs, ...allTxs];
+    txOffset += PAGE_SIZE;
+    
+    renderTransactions(allTxs);
+    
+    // Check if there are more pages
+    if (freshTxs.length === PAGE_SIZE) {
+      document.getElementById('load-older-btn').classList.remove('hidden');
+    } else {
+      document.getElementById('load-older-btn').classList.add('hidden');
+    }
   } catch (e) {
     document.getElementById('tx-table').innerHTML = `<p class="section-error">Error: ${e.message}</p>`;
   }
 }
 
+function loadOlderTx() {
+  loadNextPage();
+}
+
 function renderTransactions(txs) {
-  const real = txs.filter(t => isRealHash(t.tx_hash));
-  const mock = txs.filter(t => !isRealHash(t.tx_hash));
   const tbl = document.getElementById('tx-table');
-  const toggle = document.getElementById('history-toggle');
   
   if (!txs.length) {
     tbl.innerHTML = '<p class="section-empty">No transactions yet: run the agent to generate on-chain payments.</p>';
-    toggle.classList.add('hidden');
     return;
   }
   
-  if (mock.length && !showAll) {
-    toggle.textContent = `show full history · ${mock.length} mock`;
-    toggle.classList.remove('hidden');
-  } else {
-    toggle.classList.add('hidden');
-  }
-  
-  const rows = showAll ? txs : real;
-  if (!rows.length && !showAll) {
-    tbl.innerHTML = '<p class="section-warn">All transactions are cryptographically verified against the Base Sepolia RPC. Click "verify on chain" to fetch live block data and gas usage.</p>';
-    return;
-  }
-  
-  tbl.innerHTML = rows.map(tx => {
+  tbl.innerHTML = txs.map(tx => {
     const real = isRealHash(tx.tx_hash);
     const mode = (tx.payment_mode || 'unknown').toUpperCase().replace(/_/g, ' ');
     const isOnchain = mode === 'X402 ONCHAIN';
     const isDirect = mode === 'DIRECT API';
     const amt = tx.amount_usd != null ? `$${Number(tx.amount_usd).toFixed(2)}` : '—';
+    const ts = tx.timestamp ? fmtTs(tx.timestamp) : '—';
     const hashShort = tx.tx_hash ? `${tx.tx_hash.slice(0,10)}···${tx.tx_hash.slice(-6)}` : '';
     const proof = proofs[tx.id];
     const verified = proof?.verified;
@@ -662,43 +681,55 @@ function renderTransactions(txs) {
       </div>
       <div class="tx-cell data-text"><span class="tx-vendor-name">${tx.vendor || '—'}</span></div>
       <div class="tx-cell data-text"><span class="tx-amount">${amt}</span></div>
+      <div class="tx-cell data-text"><span class="font-mono text-[11px] text-ink-soft">${ts}</span></div>
       <div class="tx-cell data-text">
         <span class="mode-chip ${isOnchain ? 'mode-chip-onchain' : isDirect ? 'mode-chip-direct' : 'mode-chip-unknown'}" title="${isDirect ? 'settled off-chain (dev fallback)' : isOnchain ? 'settled on-chain via x402' : mode}">${mode}</span>
       </div>
       <div class="tx-cell data-text">
-        ${real ? `<button class="verify-btn" data-hash="${tx.tx_hash}" onclick="verifyTx(this.dataset.hash)">verify on chain</button>` : '<span class="verify-btn-mock">verify on chain</span>'}
+        ${real ? `<button class="verify-btn" data-hash="${tx.tx_hash}" onclick="verifyTx(this.dataset.hash)">verify</button>` : '<span class="verify-btn-mock">verify</span>'}
       </div>
-      ${real ? `<div class="tx-cell data-text"><a href="https://sepolia.basescan.org/tx/${tx.tx_hash}" target="_blank" rel="noopener" class="basescan-link">basescan ↗</a></div>` : ''}
-      ${proof ? `<div class="tx-cell data-text"><span class="proof-stamp ${verified ? 'stamp-verified' : 'stamp-rejected'}">${verified ? `<span>VERIFIED</span>${raw ? `<span class="stamp-detail"> · BLOCK ${raw.blockNumber?.toLocaleString()} · GAS ${raw.gasUsed?.toLocaleString()}</span>` : ''}` : 'REJECTED · NOT ON CHAIN'}</span></div>` : ''}
+      ${proof ? `<div class="tx-cell data-text"><span class="proof-stamp ${verified ? 'stamp-verified' : 'stamp-rejected'}">${verified ? `<span>✓</span>${raw ? `<span class="stamp-detail"> · BLOCK ${raw.blockNumber?.toLocaleString()}</span>` : ''}` : '✗'}</span></div>` : ''}
     </div>`;
   }).join('');
 }
 
 async function verifyTx(hash) {
-  // Find tx by hash to get id
-  const r = await fetch(`${API}/api/logs?limit=50`);
+  const r = await fetch(`${API}/api/logs?limit=${PAGE_SIZE}&offset=${txOffset}`);
   const d = await r.json();
   const tx = (d.transactions || []).find(t => t.tx_hash === hash);
-  if (!tx) return;
-  
-  verifying = { ...verifying, [tx.id]: true };
-  renderTransactions(d.transactions || []);
+  if (!tx) {
+    // Search in loaded transactions
+    const allR = await fetch(`${API}/api/logs?limit=200&offset=0`);
+    const allD = await allR.json();
+    const txFound = (allD.transactions || []).find(t => t.tx_hash === hash);
+    if (!txFound) return;
+    verifying = { ...verifying, [txFound.id]: true };
+  } else {
+    verifying = { ...verifying, [tx.id]: true };
+  }
+  renderTransactions(allTxs);
   
   try {
     const res = await fetch(`${API}/api/chain-proof/${encodeURIComponent(hash)}`);
     const data = await res.json();
-    proofs = { ...proofs, [tx.id]: data };
+    const txId = (d.transactions || []).find(t => t.tx_hash === hash)?.id || 
+                 allTxs.find(t => t.tx_hash === hash)?.id;
+    if (txId) {
+      proofs = { ...proofs, [txId]: data };
+    }
   } catch (e) {
-    proofs = { ...proofs, [tx.id]: { verified: false, hash, error: e.message } };
+    const txId = allTxs.find(t => t.tx_hash === hash)?.id;
+    if (txId) {
+      proofs = { ...proofs, [txId]: { verified: false, hash, error: e.message } };
+    }
   } finally {
-    verifying = { ...verifying, [tx.id]: false };
+    const txId = (d.transactions || []).find(t => t.tx_hash === hash)?.id || 
+                 allTxs.find(t => t.tx_hash === hash)?.id;
+    if (txId) {
+      verifying = { ...verifying, [txId]: false };
+    }
   }
-  renderTransactions(d.transactions || []);
-}
-
-function toggleHistory() {
-  showAll = !showAll;
-  refreshTx();
+  renderTransactions(allTxs);
 }
 
 // ── Vendor Health ──
