@@ -1,0 +1,9 @@
+$120 bill → $72 paid. No phone call. Just an agent that remembered last month's tactic worked better.
+
+HaggleMind negotiates your recurring bills using learned memory. Every negotiation updates confidence scores. Delete the memory and the price jumps back up.
+
+It runs on Base Sepolia, settles on-chain, and proved $48 of value comes from remembering.
+
+Beta test dashboard at http://158.180.57.167
+
+Repo: https://github.com/cipoklean/hagglemind

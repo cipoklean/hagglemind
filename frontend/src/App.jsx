@@ -791,7 +791,7 @@ function Footer() {
       <hr className="hairline" />
       <div className="footer-inner">
         <span className="footer-left">
-          Sibyl Memory · Base · x402 — built for the Sibyl Labs Memory Hackathon
+          Sibyl Memory · Base Sepolia · x402 — Beta test dashboard, not production
         </span>
 
         <span className="footer-health" title={health.status || "vendor server health"}>
