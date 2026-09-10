@@ -221,17 +221,16 @@ class LogsResponse(BaseModel):
 def get_logs(limit: int = 50, offset: int = 0) -> LogsResponse:
     """Return the most recent agent negotiation logs and payment transactions.
 
-    Pagination: offset=0 returns newest N rows. Use limit=6 for a compact view
-    and let the frontend request older batches via offset=6, offset=12, etc.
+    Pagination applies only to transactions (the settlement table).
+    agent_logs and action_steps are returned unbounded (they grow slowly).
     """
     try:
-        agent_logs = persistence.get_agent_logs(limit=limit + offset)
+        # Unbounded logs and action steps — these are small and rarely queried in bulk
+        agent_logs = persistence.get_agent_logs(limit=200)
         transactions = persistence.get_transactions(limit=limit + offset)
-        action_steps = persistence.get_action_steps(limit=limit + offset)
-        # Apply offset after fetching extra rows so ordering stays DESC (newest first)
-        agent_logs = agent_logs[offset:]
-        transactions = transactions[offset:]
-        action_steps = action_steps[offset:]
+        action_steps = persistence.get_action_steps(limit=200)
+        # Slice transactions to requested page
+        transactions = transactions[offset:offset + limit]
         # Normalise tx_hash: web3 receipt.transactionHash.hex() returns the
         # hex WITHOUT the 0x prefix; our frontend's isRealHash() requires a
         # 66-char 0x-prefixed string.  Prepend 0x for real hashes stored
