@@ -173,18 +173,19 @@ def log_transaction(entry: dict[str, Any]) -> int:
         conn.close()
 
 
-def get_transactions(limit: int = 50, vendor: Optional[str] = None) -> list[dict[str, Any]]:
-    """Return the most recent transaction rows."""
+def get_transactions(limit: int = 50, vendor: Optional[str] = None, offset: int = 0) -> list[dict[str, Any]]:
+    """Return the most recent transaction rows with pagination."""
     conn = _connect()
     try:
         if vendor:
             rows = conn.execute(
-                "SELECT * FROM transactions WHERE vendor = ? ORDER BY id DESC LIMIT ?",
-                (vendor, limit),
+                "SELECT * FROM transactions WHERE vendor = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (vendor, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM transactions ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT * FROM transactions ORDER BY id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
         return [dict(r) for r in rows]
     finally:

@@ -227,10 +227,9 @@ def get_logs(limit: int = 50, offset: int = 0) -> LogsResponse:
     try:
         # Unbounded logs and action steps — these are small and rarely queried in bulk
         agent_logs = persistence.get_agent_logs(limit=200)
-        transactions = persistence.get_transactions(limit=limit + offset)
         action_steps = persistence.get_action_steps(limit=200)
-        # Slice transactions to requested page
-        transactions = transactions[offset:offset + limit]
+        # Paginate transactions directly via SQL OFFSET
+        transactions = persistence.get_transactions(limit=limit, offset=offset)
         # Normalise tx_hash: web3 receipt.transactionHash.hex() returns the
         # hex WITHOUT the 0x prefix; our frontend's isRealHash() requires a
         # 66-char 0x-prefixed string.  Prepend 0x for real hashes stored
