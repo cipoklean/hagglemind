@@ -394,7 +394,12 @@ let verifying = {};
 let proofs = {};
 
 // ── Helpers ──
-function isRealHash(h) { return typeof h === 'string' && h.startsWith('0x') && h.length === 66; }
+function isRealHash(h) {
+  if (!h) return false;
+  // Accept both 0x-prefixed and raw hex (64+ chars)
+  const clean = h.startsWith('0x') ? h.slice(2) : h;
+  return clean.length >= 64 && /^[0-9a-fA-F]+$/.test(clean);
+}
 function fmtTs(ts) {
   if (!ts) return '—';
   try {
