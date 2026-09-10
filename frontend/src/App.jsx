@@ -802,7 +802,7 @@ function Footer() {
         </span>
 
         <a
-          href="https://github.com/cipoklean/veriflow"
+          href="https://github.com/cipoklean/hagglemind"
           target="_blank"
           rel="noopener noreferrer"
           className="footer-right"
